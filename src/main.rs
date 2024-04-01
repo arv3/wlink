@@ -342,6 +342,8 @@ fn main() -> Result<()> {
                             if address.is_some() {
                                 log::warn!("--address is ignored when flashing ELF or ihex");
                             }
+                            let mut last_pack_len = 0;
+                            let mut offset = 0;
                             for section in sections {
                                 let start_address =
                                     sess.chip_family.fix_code_flash_start(section.address);
@@ -350,7 +352,10 @@ fn main() -> Result<()> {
                                     section.data.len(),
                                     start_address
                                 );
-                                sess.write_flash(&section.data, start_address)?;
+                                offset += ((last_pack_len + 4095) / 4096) * 4096;
+                                log::info!("offset: 0x{:08x}", offset);
+                                sess.write_flash(&section.data, start_address - offset)?;
+                                last_pack_len = section.data.len() as u32;
                             }
                         }
                     }
