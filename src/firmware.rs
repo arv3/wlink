@@ -39,7 +39,7 @@ pub enum Firmware {
 }
 
 impl Firmware {
-    /// Merge sections, and fill gap with 0xff
+    /// Merge sections w/ <= 4096 bytes gap
     pub fn merge_sections(self) -> Result<Self> {
         let Firmware::Sections(mut sections) = self else {
             return Ok(self);
@@ -51,11 +51,15 @@ impl Firmware {
         let mut last = it
             .next()
             .expect("firmware must has at least one section; qed");
-
         for sect in it {
             if let Some(gap) = sect.address.checked_sub(last.end_address()) {
-                if gap > 0 {
-                    log::debug!("Merge firmware sections with gap: {}", gap);
+                if gap > 4096 {
+                    merged.push(last);
+                    last = sect.clone();
+                    continue;
+                } else {
+                    last.data.resize(last.data.len() + gap as usize, 0);
+                    last.data.extend_from_slice(&sect.data);
                 }
                 last.data.resize(last.data.len() + gap as usize, 0xff); // fill gap with 0xff
                 last.data.extend_from_slice(&sect.data);
@@ -67,6 +71,7 @@ impl Firmware {
                 ));
             }
         }
+
         merged.push(last);
         Ok(Firmware::Sections(merged))
     }
