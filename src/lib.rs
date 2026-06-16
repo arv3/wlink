@@ -11,7 +11,7 @@ pub mod probe;
 pub mod regs;
 pub mod usb_device;
 
-use clap::{builder::PossibleValue, ValueEnum};
+use clap::{ValueEnum, builder::PossibleValue};
 use probe::WchLink;
 
 pub use crate::error::{Error, Result};
@@ -39,6 +39,7 @@ pub enum RiscvChip {
     /// The only reference I can find is <https://www.wch.cn/news/606.html>.
     CH8571 = 0x0A, // 10,
     /// CH59x RISC-V4C BLE 5.4 series, fallback as CH58X
+    /// FIXME: CH585 also reported as this
     CH59X = 0x0B, // 11
     /// CH643 RISC-V4C series, RGB Display Driver MCU
     CH643 = 0x0C, // 12
@@ -54,7 +55,7 @@ pub enum RiscvChip {
     /// CH564 RISC-V4J series
     CH564 = 0x0F,
     /// CH32V002/4/5/6/7, CH32M007
-    CH32V007 = 0x4E,
+    CH32V00X = 0x4E,
     /// CH645, CH653, RISC-V4C
     CH645 = 0x46,
     /// CH32V317 RISC-V4 series
@@ -62,6 +63,8 @@ pub enum RiscvChip {
     // Cortex-M chips
     CH32F10X = 0x04,
     CH32F20X = 0x08,
+    /// CH32H415/CH32H416/CH32H417 RISC-V5F+RISC-V3F series
+    CH32H41X = 0xC6,
 }
 
 impl ValueEnum for RiscvChip {
@@ -82,9 +85,10 @@ impl ValueEnum for RiscvChip {
             RiscvChip::CH641,
             RiscvChip::CH585,
             RiscvChip::CH564,
-            RiscvChip::CH32V007,
+            RiscvChip::CH32V00X,
             RiscvChip::CH645,
             RiscvChip::CH32V317,
+            RiscvChip::CH32H41X,
         ]
     }
 
@@ -105,9 +109,24 @@ impl ValueEnum for RiscvChip {
             RiscvChip::CH32L103 => Some(PossibleValue::new("CH32L103")),
             RiscvChip::CH641 => Some(PossibleValue::new("CH641")),
             RiscvChip::CH564 => Some(PossibleValue::new("CH564")),
-            RiscvChip::CH32V007 => Some(PossibleValue::new("CH32V007")),
+            RiscvChip::CH32V00X => Some(PossibleValue::new("CH32V00X")),
             RiscvChip::CH645 => Some(PossibleValue::new("CH645")),
             RiscvChip::CH32V317 => Some(PossibleValue::new("CH32V317")),
+            RiscvChip::CH32H41X => Some(PossibleValue::new("CH32H41X").aliases([
+                "CH32H415",
+                "CH32H415REU",
+                "CH32H415REU6",
+                "CH32H416",
+                "CH32H416RDU",
+                "CH32H416RDU6",
+                "CH32H417",
+                "CH32H417QEU",
+                "CH32H417QEU6",
+                "CH32H417MEU",
+                "CH32H417MEU6",
+                "CH32H417WEU",
+                "CH32H417WEU6",
+            ])),
             _ => None,
         }
     }
@@ -128,7 +147,7 @@ impl ValueEnum for RiscvChip {
             // Note that CH32X034 seems never released
             "CH32X0" | "CH32X03X" | "CH32X033" | "CH32X034" | "CH32X035" => Ok(RiscvChip::CH32X035),
             "CH32V002" | "CH32V004" | "CH32V005" | "CH32V006" | "CH32V007" | "CH32M007" => {
-                Ok(RiscvChip::CH32V007)
+                Ok(RiscvChip::CH32V00X)
             }
             "CH565" | "CH569" => Ok(RiscvChip::CH56X),
             "CH57X" | "CH571" | "CH573" => Ok(RiscvChip::CH57X),
@@ -152,6 +171,11 @@ impl ValueEnum for RiscvChip {
                 );
                 Ok(RiscvChip::CH582)
             }
+            "CH32H41X" | "CH32H415" | "CH32H415REU" | "CH32H415REU6" | "CH32H416"
+            | "CH32H416RDU" | "CH32H416RDU6" | "CH32H417" | "CH32H417QEU" | "CH32H417QEU6"
+            | "CH32H417MEU" | "CH32H417MEU6" | "CH32H417WEU" | "CH32H417WEU6" => {
+                Ok(RiscvChip::CH32H41X)
+            }
             _ => Err(format!("Unknown chip: {}", s)),
         }
     }
@@ -167,12 +191,13 @@ impl RiscvChip {
                 | RiscvChip::CH32V20X
                 | RiscvChip::CH32V30X
                 | RiscvChip::CH32V003
-                | RiscvChip::CH32V007
+                | RiscvChip::CH32V00X
                 | RiscvChip::CH32L103
                 | RiscvChip::CH32X035
                 | RiscvChip::CH641
                 | RiscvChip::CH645
                 | RiscvChip::CH32V317
+                | RiscvChip::CH32H41X
         )
     }
 
@@ -228,7 +253,7 @@ impl RiscvChip {
             self,
             RiscvChip::CH32V003
                 | RiscvChip::CH645
-                | RiscvChip::CH32V007
+                | RiscvChip::CH32V00X
                 | RiscvChip::CH32V103
                 | RiscvChip::CH32V20X
                 | RiscvChip::CH32V30X
@@ -240,10 +265,11 @@ impl RiscvChip {
         )
     }
 
-    pub fn is_rv32ec(&self) -> bool {
+    pub fn is_rv32e(&self) -> bool {
         matches!(
             self,
-            RiscvChip::CH32V003 | RiscvChip::CH641 | RiscvChip::CH32V007
+            RiscvChip::CH32V003 | RiscvChip::CH641 // rv32ec
+                | RiscvChip::CH32V00X // rv32emc
         )
     }
 
@@ -269,11 +295,15 @@ impl RiscvChip {
             }
             RiscvChip::CH57X | RiscvChip::CH582 => {
                 log::warn!("The debug interface has been opened, there is a risk of code leakage.");
-                log::warn!("Please ensure that the debug interface has been closed before leaving factory!");
+                log::warn!(
+                    "Please ensure that the debug interface has been closed before leaving factory!"
+                );
             }
             RiscvChip::CH56X => {
                 log::warn!("The debug interface has been opened, there is a risk of code leakage.");
-                log::warn!("Please ensure that the debug interface has been closed before leaving factory!");
+                log::warn!(
+                    "Please ensure that the debug interface has been closed before leaving factory!"
+                );
                 // 81 0d 01 04
                 // should test return value
                 let resp = probe.send_command(commands::RawCommand::<0x0d>(vec![0x04]))?;
@@ -297,11 +327,12 @@ impl RiscvChip {
             RiscvChip::CH32X035 | RiscvChip::CH643 => &flash_op::CH643,
             RiscvChip::CH32L103 => &flash_op::CH32L103,
             RiscvChip::CH564 => &flash_op::CH564,
-            RiscvChip::CH32V007 => &flash_op::CH32V007,
+            RiscvChip::CH32V00X => &flash_op::CH32V00X,
             RiscvChip::CH645 => &flash_op::CH645,
             RiscvChip::CH32V317 => &flash_op::CH32V317,
             RiscvChip::CH32F10X => todo!(),
             RiscvChip::CH32F20X => todo!(),
+            RiscvChip::CH32H41X => &flash_op::CH32H417,
         }
     }
     fn try_from_u8(value: u8) -> Result<Self> {
@@ -321,11 +352,12 @@ impl RiscvChip {
             0x49 => Ok(RiscvChip::CH641),
             0x4B => Ok(RiscvChip::CH585),
             0x0F => Ok(RiscvChip::CH564),
-            0x4E => Ok(RiscvChip::CH32V007),
+            0x4E => Ok(RiscvChip::CH32V00X),
             0x46 => Ok(RiscvChip::CH645),
             0x86 => Ok(RiscvChip::CH32V317),
             0x04 => Ok(RiscvChip::CH32F10X),
             0x08 => Ok(RiscvChip::CH32F20X),
+            0xC6 => Ok(RiscvChip::CH32H41X),
             _ => Err(Error::UnknownChip(value)),
         }
     }
@@ -364,8 +396,43 @@ impl RiscvChip {
     /// pack size for fastprogram
     pub fn write_pack_size(&self) -> u32 {
         match self {
-            RiscvChip::CH32V003 | RiscvChip::CH641 | RiscvChip::CH32V007 => 1024,
+            RiscvChip::CH32V003 | RiscvChip::CH641 | RiscvChip::CH32V00X => 1024,
             _ => 4096,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RiscvChip;
+
+    #[test]
+    fn ch32h41x_supports_flash_protect_commands() {
+        assert!(RiscvChip::CH32H41X.support_flash_protect());
+    }
+
+    #[test]
+    fn ch32h41x_aliases_match_openwch_packages() {
+        for alias in [
+            "CH32H41X",
+            "CH32H415",
+            "CH32H415REU",
+            "CH32H415REU6",
+            "CH32H416",
+            "CH32H416RDU",
+            "CH32H416RDU6",
+            "CH32H417",
+            "CH32H417QEU",
+            "CH32H417QEU6",
+            "CH32H417MEU",
+            "CH32H417MEU6",
+            "CH32H417WEU",
+            "CH32H417WEU6",
+        ] {
+            assert_eq!(
+                <RiscvChip as clap::ValueEnum>::from_str(alias, false),
+                Ok(RiscvChip::CH32H41X)
+            );
         }
     }
 }

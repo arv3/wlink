@@ -22,11 +22,11 @@ pub fn open_nth(vid: u16, pid: u16, nth: usize) -> Result<Box<dyn USBDeviceBacke
     #[cfg(all(target_os = "windows", target_arch = "x86"))]
     {
         ch375_driver::CH375USBDevice::open_nth(vid, pid, nth)
-            .or_else(|_| libusb::LibUSBDevice::open_nth(vid, pid, nth))
+            .or_else(|_| libusb::NusbDevice::open_nth(vid, pid, nth))
     }
     #[cfg(not(all(target_os = "windows", target_arch = "x86")))]
     {
-        libusb::LibUSBDevice::open_nth(vid, pid, nth)
+        libusb::NusbDevice::open_nth(vid, pid, nth)
     }
 }
 
@@ -52,26 +52,30 @@ pub fn list_devices(vid: u16, pid: u16) -> Result<Vec<String>> {
 
 pub mod libusb {
     use std::fmt;
+    use std::io::{Read, Write};
 
     use super::*;
-    use rusb::{DeviceHandle, Speed, UsbContext};
+    use nusb::MaybeFuture;
+    use nusb::transfer::{Bulk, In, Out};
 
     pub fn list_libusb_devices(vid: u16, pid: u16) -> Result<Vec<impl Display>> {
-        let context = rusb::Context::new()?;
-        let devices = context.devices()?;
+        let devices = nusb::list_devices().wait().map_err(crate::Error::Usb)?;
         let mut result = vec![];
         let mut idx = 0;
 
-        for device in devices.iter() {
-            let device_desc = device.device_descriptor()?;
-            if device_desc.vendor_id() == vid && device_desc.product_id() == pid {
+        for device in devices {
+            if device.vendor_id() == vid && device.product_id() == pid {
+                let serial = device
+                    .serial_number()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "N/A".to_string());
+
                 result.push(format!(
-                    "<WCH-Link#{} libusb device> Bus {:03} Device {:03} ID {:04x}:{:04x}({})",
+                    "<WCH-Link#{} nusb device> ID {:04x}:{:04x} Serial {} ({})",
                     idx,
-                    device.bus_number(),
-                    device.address(),
-                    device_desc.vendor_id(),
-                    device_desc.product_id(),
+                    device.vendor_id(),
+                    device.product_id(),
+                    serial,
                     get_speed(device.speed())
                 ));
                 idx += 1;
@@ -80,79 +84,96 @@ pub mod libusb {
         Ok(result)
     }
 
-    pub struct LibUSBDevice {
-        handle: DeviceHandle<rusb::Context>,
+    pub struct NusbDevice {
+        interface: nusb::Interface,
+        #[allow(dead_code)]
         timeout: Duration,
     }
 
-    impl fmt::Debug for LibUSBDevice {
+    impl fmt::Debug for NusbDevice {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.debug_struct("USBDevice")
-                .field("provider", &"libusb")
-                .field("handle", &self.handle.device())
+                .field("provider", &"nusb")
                 .finish()
         }
     }
 
-    impl USBDeviceBackend for LibUSBDevice {
+    impl USBDeviceBackend for NusbDevice {
         fn set_timeout(&mut self, timeout: Duration) {
             self.timeout = timeout;
         }
 
         fn open_nth(vid: u16, pid: u16, nth: usize) -> Result<Box<dyn USBDeviceBackend>> {
-            let context = rusb::Context::new()?;
-            let devices = context.devices()?;
-            let mut result = vec![];
-            for device in devices.iter() {
-                let device_desc = device.device_descriptor()?;
-                if device_desc.vendor_id() == vid && device_desc.product_id() == pid {
-                    result.push(device);
-                }
-            }
-            if nth >= result.len() {
+            let devices: Vec<_> = nusb::list_devices()
+                .wait()
+                .map_err(crate::Error::Usb)?
+                .filter(|d| d.vendor_id() == vid && d.product_id() == pid)
+                .collect();
+
+            if nth >= devices.len() {
                 return Err(crate::Error::ProbeNotFound);
             }
-            let device = result.remove(nth);
-            let handle = device.open()?;
 
-            log::trace!("Device: {:?}", &device);
+            let device_info = &devices[nth];
+            log::trace!(
+                "Device: {:04x}:{:04x}",
+                device_info.vendor_id(),
+                device_info.product_id()
+            );
 
-            let desc = device.device_descriptor()?;
-            let serial_number = handle.read_serial_number_string_ascii(&desc)?;
-            log::debug!("Serial number: {:?}", serial_number);
+            if let Some(serial) = device_info.serial_number() {
+                log::debug!("Serial number: {:?}", serial);
+            }
 
-            handle.claim_interface(0)?;
+            let device = device_info.open().wait().map_err(|e| {
+                log::error!("Failed to open USB device: {}", e);
+                #[cfg(target_os = "windows")]
+                log::warn!("It's likely no WinUSB driver installed. Please install it from Zadig. See also: https://zadig.akeo.ie");
+                #[cfg(target_os = "linux")]
+                log::warn!("It's likely the udev rules are not installed properly. Please refer to README.md for more details.");
+                crate::Error::Usb(e)
+            })?;
 
-            Ok(Box::new(LibUSBDevice {
-                handle,
+            let interface = device
+                .claim_interface(0)
+                .wait()
+                .map_err(crate::Error::Usb)?;
+
+            Ok(Box::new(NusbDevice {
+                interface,
                 timeout: Duration::from_millis(5000),
             }))
         }
 
         fn read_endpoint(&mut self, ep: u8, buf: &mut [u8]) -> Result<usize> {
-            let bytes_read = self.handle.read_bulk(ep, buf, self.timeout)?;
-            Ok(bytes_read)
+            let endpoint = self
+                .interface
+                .endpoint::<Bulk, In>(ep)
+                .map_err(|e| crate::Error::Custom(format!("Failed to get endpoint: {}", e)))?;
+            let mut reader = endpoint.reader(64);
+            let n = reader.read(buf)?;
+            Ok(n)
         }
 
         fn write_endpoint(&mut self, ep: u8, buf: &[u8]) -> Result<()> {
-            self.handle.write_bulk(ep, buf, self.timeout)?;
+            let endpoint = self
+                .interface
+                .endpoint::<Bulk, Out>(ep)
+                .map_err(|e| crate::Error::Custom(format!("Failed to get endpoint: {}", e)))?;
+            let mut writer = endpoint.writer(64);
+            writer.write_all(buf)?;
+            writer.flush()?;
             Ok(())
         }
     }
 
-    impl Drop for LibUSBDevice {
-        fn drop(&mut self) {
-            let _ = self.handle.release_interface(0);
-        }
-    }
-
-    fn get_speed(speed: Speed) -> &'static str {
+    fn get_speed(speed: Option<nusb::Speed>) -> &'static str {
         match speed {
-            Speed::SuperPlus => "USB-SS+ 10000 Mbps",
-            Speed::Super => "USB-SS 5000 Mbps",
-            Speed::High => "USB-HS 480 Mbps",
-            Speed::Full => "USB-FS 12 Mbps",
-            Speed::Low => "USB-LS 1.5 Mbps",
+            Some(nusb::Speed::SuperPlus) => "USB-SS+ 10000 Mbps",
+            Some(nusb::Speed::Super) => "USB-SS 5000 Mbps",
+            Some(nusb::Speed::High) => "USB-HS 480 Mbps",
+            Some(nusb::Speed::Full) => "USB-FS 12 Mbps",
+            Some(nusb::Speed::Low) => "USB-LS 1.5 Mbps",
             _ => "(unknown)",
         }
     }
@@ -162,34 +183,36 @@ pub mod libusb {
 pub mod ch375_driver {
     use libloading::os::windows::*;
     use std::fmt;
+    use std::sync::OnceLock;
 
     use super::*;
     use crate::Error;
 
-    static mut CH375_DRIVER: Option<Library> = None;
+    static CH375_DRIVER: OnceLock<std::result::Result<Library, String>> = OnceLock::new();
 
     fn ensure_library_load() -> Result<&'static Library> {
-        unsafe {
-            if CH375_DRIVER.is_none() {
-                CH375_DRIVER = Some(
-                    Library::new("WCHLinkDLL.dll")
-                        .map_err(|_| Error::Custom("WCHLinkDLL.dll not found".to_string()))?,
-                );
-                let lib = CH375_DRIVER.as_ref().unwrap();
-                let get_version: Symbol<unsafe extern "stdcall" fn() -> u32> =
-                    { lib.get(b"CH375GetVersion").unwrap() };
-                let get_driver_version: Symbol<unsafe extern "stdcall" fn() -> u32> =
-                    { lib.get(b"CH375GetDrvVersion").unwrap() };
+        let result = CH375_DRIVER.get_or_init(|| {
+            let lib = match unsafe { Library::new("WCHLinkDLL.dll") } {
+                Ok(lib) => lib,
+                Err(_) => return Err("WCHLinkDLL.dll not found".to_string()),
+            };
 
-                log::debug!(
-                    "DLL version {}, driver version {}",
-                    get_version(),
-                    get_driver_version()
-                );
-                Ok(lib)
-            } else {
-                Ok(CH375_DRIVER.as_ref().unwrap())
-            }
+            let get_version: Symbol<unsafe extern "stdcall" fn() -> u32> =
+                unsafe { lib.get(b"CH375GetVersion").unwrap() };
+            let get_driver_version: Symbol<unsafe extern "stdcall" fn() -> u32> =
+                unsafe { lib.get(b"CH375GetDrvVersion").unwrap() };
+
+            log::debug!(
+                "DLL version {}, driver version {}",
+                unsafe { get_version() },
+                unsafe { get_driver_version() }
+            );
+            Ok(lib)
+        });
+
+        match result {
+            Ok(lib) => Ok(lib),
+            Err(e) => Err(Error::Custom(e.clone())),
         }
     }
 
@@ -344,11 +367,7 @@ pub mod ch375_driver {
             let ret = unsafe {
                 write_end_point(self.index, ep as u32, buf.as_ptr() as *mut u8, &mut len)
             };
-            if ret {
-                Ok(())
-            } else {
-                Err(Error::Driver)
-            }
+            if ret { Ok(()) } else { Err(Error::Driver) }
         }
 
         fn set_timeout(&mut self, timeout: Duration) {

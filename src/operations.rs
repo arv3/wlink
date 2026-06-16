@@ -4,9 +4,9 @@ use indicatif::ProgressBar;
 use std::{thread::sleep, time::Duration};
 
 use crate::{
+    Error, Result, RiscvChip,
     commands::{self, Speed},
     probe::WchLink,
-    Error, Result, RiscvChip,
 };
 
 /// A running probe session, flash, erase, inspect, etc.
@@ -30,44 +30,47 @@ impl ProbeSession {
             return Err(Error::UnsupportedChip(chip));
         }
 
-        let mut chip_info = None;
-
-        for _ in 0..3 {
+        let mut attempts = 0;
+        let chip_info = loop {
             probe.send_command(commands::SetSpeed {
                 riscvchip: chip as u8,
                 speed,
             })?;
 
-            if let Ok(resp) = probe.send_command(commands::control::AttachChip) {
-                log::info!("Attached chip: {}", resp);
-                chip_info = Some(resp);
-
-                if let Some(expected_chip) = expected_chip {
-                    if resp.chip_family != expected_chip {
-                        log::error!(
-                            "Attached chip type ({:?}) does not match expected chip type ({:?})",
-                            resp.chip_family,
-                            expected_chip
-                        );
-                        return Err(Error::ChipMismatch(expected_chip, resp.chip_family));
+            match probe.send_command(commands::control::AttachChip) {
+                Ok(resp) => break resp,
+                Err(e) => {
+                    log::debug!("error {e:?}, retrying...");
+                    if attempts >= 3 {
+                        return Err(e);
                     }
+                    sleep(Duration::from_millis(100));
                 }
-                // set speed again
-                if expected_chip.is_none() {
-                    probe.send_command(commands::SetSpeed {
-                        riscvchip: resp.chip_family as u8,
-                        speed,
-                    })?;
-                }
+            }
 
-                break;
-            } else {
-                log::debug!("retrying...");
-                sleep(Duration::from_millis(100));
+            attempts += 1;
+        };
+
+        log::info!("Attached chip: {}", chip_info);
+
+        if let Some(expected_chip) = expected_chip {
+            if chip_info.chip_family != expected_chip {
+                log::error!(
+                    "Attached chip type ({:?}) does not match expected chip type ({:?})",
+                    chip_info.chip_family,
+                    expected_chip
+                );
+                return Err(Error::ChipMismatch(expected_chip, chip_info.chip_family));
             }
         }
+        // set speed again
+        if expected_chip.is_none() {
+            probe.send_command(commands::SetSpeed {
+                riscvchip: chip_info.chip_family as u8,
+                speed,
+            })?;
+        }
 
-        let chip_info = chip_info.ok_or(Error::NotAttached)?;
         chip_info.chip_family.do_post_init(&mut probe)?;
 
         //let ret = self.send_command(control::CheckQE)?;
@@ -133,20 +136,18 @@ impl ProbeSession {
         // HACK: requires a fresh attach
         self.reattach_chip()?;
 
-        let read_protected = self
+        let mut read_protected = self
             .probe
             .send_command(commands::ConfigChip::CheckReadProtect)?;
+        // Skip Unprotect when not protected: the probe firmware mass-erases
+        // the option-byte page, wiping USER/Data/WRPR.
         if read_protected == commands::ConfigChip::FLAG_READ_PROTECTED {
-            log::info!("Flash already unprotected");
+            self.probe.send_command(commands::ConfigChip::Unprotect)?;
+            self.reattach_chip()?;
+            read_protected = self
+                .probe
+                .send_command(commands::ConfigChip::CheckReadProtect)?;
         }
-
-        self.probe.send_command(commands::ConfigChip::Unprotect)?;
-
-        self.reattach_chip()?;
-
-        let read_protected = self
-            .probe
-            .send_command(commands::ConfigChip::CheckReadProtect)?;
         log::info!(
             "Read protected: {}",
             read_protected == commands::ConfigChip::FLAG_READ_PROTECTED
@@ -212,8 +213,16 @@ impl ProbeSession {
             if ret == commands::ConfigChip::FLAG_READ_PROTECTED {
                 log::warn!("Flash is protected, unprotecting...");
                 self.unprotect_flash()?;
-            } else if ret == 2 {
-                self.unprotect_flash()?; // FIXME: 2 is unknown
+            } else if ret == commands::ConfigChip::FLAG_READ_UNPROTECTED {
+                let write_protected = self
+                    .probe
+                    .send_command(commands::ConfigChip::CheckReadProtectEx)?;
+                if write_protected == commands::ConfigChip::FLAG_WRITE_PROTECTED {
+                    log::warn!("Flash is write protected, unprotecting...");
+                    self.unprotect_flash()?;
+                } else if write_protected != commands::ConfigChip::FLAG_WRITE_UNPROTECTED {
+                    log::warn!("Unknown flash write protect status: {}", write_protected);
+                }
             } else {
                 log::warn!("Unknown flash protect status: {}", ret);
             }
@@ -324,7 +333,9 @@ impl ProbeSession {
 
         if mem.starts_with(&[0xA9, 0xBD, 0xF9, 0xF3]) {
             log::warn!("A9 BD F9 F3 sequence detected!");
-            log::warn!("If the chip is just put into debug mode, you should flash the new firmware to the chip first");
+            log::warn!(
+                "If the chip is just put into debug mode, you should flash the new firmware to the chip first"
+            );
             log::warn!("Or else this indicates a reading to invalid location");
         }
 

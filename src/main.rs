@@ -2,12 +2,12 @@ use std::{thread::sleep, time::Duration};
 
 use anyhow::Result;
 use wlink::{
-    commands,
+    RiscvChip, commands,
     dmi::DebugModuleInterface,
     firmware::{fill_tiny_gap_between_sections, read_firmware_from_file, Firmware},
     operations::ProbeSession,
     probe::WchLink,
-    regs, RiscvChip,
+    regs,
 };
 
 use clap::{Parser, Subcommand};

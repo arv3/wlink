@@ -2,6 +2,7 @@ name: Build and Test
 
 on:
   push:
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
@@ -32,8 +33,6 @@ jobs:
             arch: linux-x64
           - os: macos-latest
             arch: macos-arm64
-          - os: macos-12
-            arch: macos-x64
     runs-on: ${{ matrix.config.os }}
 
     steps:
@@ -125,6 +124,9 @@ jobs:
           name: "wlink nightly release $$"
           draft: false
           prerelease: true
+          # Skip republishing when the nightly tag is already at HEAD — avoids
+          # spamming watchers with empty re-releases on cron runs (issue #92).
+          only-when-changed: true
           body: |
             This is a nightly binary release of the wlink command line tool.
 
