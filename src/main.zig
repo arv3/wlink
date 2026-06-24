@@ -404,12 +404,12 @@ fn writeMemCommand(out: *std.Io.Writer, cli: Cli) !u8 {
 // --------------------------------------------------------------------------
 
 fn listProbes(gpa: std.mem.Allocator, out: *std.Io.Writer) !void {
-    const rv = try wlink.usb.listDevices(gpa, wlink.probe.VENDOR_ID, wlink.probe.PRODUCT_ID);
+    const rv = try wlink.usb.listDevices(gpa, null, wlink.probe.VENDOR_ID, wlink.probe.PRODUCT_ID);
     defer wlink.usb.freeListings(gpa, rv);
     for (rv) |d| {
         try out.print("<WCH-Link#{d}> ID {x:0>4}:{x:0>4} Serial {s} ({s}) (RV mode)\n", .{ d.index, d.vid, d.pid, d.serial, d.speed });
     }
-    const dap = try wlink.usb.listDevices(gpa, wlink.probe.VENDOR_ID_DAP, wlink.probe.PRODUCT_ID_DAP);
+    const dap = try wlink.usb.listDevices(gpa, null, wlink.probe.VENDOR_ID_DAP, wlink.probe.PRODUCT_ID_DAP);
     defer wlink.usb.freeListings(gpa, dap);
     for (dap) |d| {
         try out.print("<WCH-Link#{d}> ID {x:0>4}:{x:0>4} Serial {s} ({s}) (DAP mode)\n", .{ d.index, d.vid, d.pid, d.serial, d.speed });

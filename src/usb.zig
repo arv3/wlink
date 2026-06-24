@@ -49,10 +49,14 @@ fn speedName(speed: c_int) []const u8 {
     };
 }
 
-/// An opened WCH-Link USB device. Owns its own libusb context for simplicity
-/// (this is a single-device CLI tool, not a hot path).
+/// An opened WCH-Link USB device.
+///
+/// When opened with a caller-supplied libusb context (`owns_ctx == false`), `deinit`
+/// closes the device but leaves the context alone — the caller owns it. When opened
+/// without one, the Device creates and owns a private context.
 pub const Device = struct {
     ctx: ?*c.libusb_context,
+    owns_ctx: bool,
     handle: ?*c.libusb_device_handle,
     timeout_ms: c_uint = 5000,
 
@@ -62,7 +66,7 @@ pub const Device = struct {
             c.libusb_close(h);
             self.handle = null;
         }
-        if (self.ctx != null) {
+        if (self.owns_ctx and self.ctx != null) {
             c.libusb_exit(self.ctx);
             self.ctx = null;
         }
@@ -94,14 +98,28 @@ pub const Device = struct {
     }
 };
 
+/// Cast a caller-supplied opaque context pointer to libusb's context type. Using
+/// `?*anyopaque` in the public API keeps it compatible with a context created by a
+/// different module's `@cImport` of libusb (whose `libusb_context` is a distinct but
+/// layout-identical opaque type).
+inline fn asCtx(ctx: ?*anyopaque) ?*c.libusb_context {
+    return @ptrCast(ctx);
+}
+
 /// Open the nth device matching (vid, pid). nth is 0-based.
-pub fn openNth(vid: u16, pid: u16, nth: usize) Error!Device {
-    var ctx: ?*c.libusb_context = null;
-    if (c.libusb_init(&ctx) != c.LIBUSB_SUCCESS) return Error.Usb;
-    errdefer c.libusb_exit(ctx);
+///
+/// If `ctx` is non-null it is used and left owned by the caller; if null, a private
+/// libusb context is created and owned by the returned Device.
+pub fn openNth(ctx: ?*anyopaque, vid: u16, pid: u16, nth: usize) Error!Device {
+    const owns_ctx = ctx == null;
+    var use_ctx: ?*c.libusb_context = asCtx(ctx);
+    if (owns_ctx) {
+        if (c.libusb_init(&use_ctx) != c.LIBUSB_SUCCESS) return Error.Usb;
+    }
+    errdefer if (owns_ctx) c.libusb_exit(use_ctx);
 
     var list: [*c]?*c.libusb_device = undefined;
-    const n = c.libusb_get_device_list(ctx, &list);
+    const n = c.libusb_get_device_list(use_ctx, &list);
     if (n < 0) return Error.Usb;
     defer c.libusb_free_device_list(list, 1);
 
@@ -128,7 +146,7 @@ pub fn openNth(vid: u16, pid: u16, nth: usize) Error!Device {
                 std.log.err("Failed to claim interface: {s}", .{errName(rc_claim)});
                 return Error.Usb;
             }
-            return Device{ .ctx = ctx, .handle = handle };
+            return Device{ .ctx = use_ctx, .owns_ctx = owns_ctx, .handle = handle };
         }
         idx += 1;
     }
@@ -146,13 +164,19 @@ pub const Listing = struct {
 
 /// Enumerate devices matching (vid, pid). Caller owns the returned slice and each
 /// entry's `serial`; free with `freeListings`.
-pub fn listDevices(allocator: std.mem.Allocator, vid: u16, pid: u16) (Error || std.mem.Allocator.Error)![]Listing {
-    var ctx: ?*c.libusb_context = null;
-    if (c.libusb_init(&ctx) != c.LIBUSB_SUCCESS) return Error.Usb;
-    defer c.libusb_exit(ctx);
+///
+/// If `ctx` is non-null it is used (and left owned by the caller); if null, a private
+/// libusb context is created and torn down for the duration of the call.
+pub fn listDevices(allocator: std.mem.Allocator, ctx: ?*anyopaque, vid: u16, pid: u16) (Error || std.mem.Allocator.Error)![]Listing {
+    const owns_ctx = ctx == null;
+    var use_ctx: ?*c.libusb_context = asCtx(ctx);
+    if (owns_ctx) {
+        if (c.libusb_init(&use_ctx) != c.LIBUSB_SUCCESS) return Error.Usb;
+    }
+    defer if (owns_ctx) c.libusb_exit(use_ctx);
 
     var list: [*c]?*c.libusb_device = undefined;
-    const n = c.libusb_get_device_list(ctx, &list);
+    const n = c.libusb_get_device_list(use_ctx, &list);
     if (n < 0) return Error.Usb;
     defer c.libusb_free_device_list(list, 1);
 

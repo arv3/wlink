@@ -124,12 +124,19 @@ pub const WchLink = struct {
     /// Scratch buffer for command replies; a `transact` result points into this.
     in_buf: [64]u8 = undefined,
 
-    /// Open the nth WCH-Link in RV mode. If the device is found only in DAP mode,
-    /// returns Error.ProbeModeNotSupported.
+    /// Open the nth WCH-Link in RV mode, creating a private libusb context.
+    /// If the device is found only in DAP mode, returns Error.ProbeModeNotSupported.
     pub fn openNth(nth: usize) Error!WchLink {
-        const device = usb.openNth(VENDOR_ID, PRODUCT_ID, nth) catch |e| {
+        return openNthCtx(null, nth);
+    }
+
+    /// Like `openNth`, but uses a caller-supplied libusb context (`null` = create one).
+    /// Pass a `*libusb_context` from any module's libusb `@cImport` (it coerces to
+    /// `?*anyopaque`); the caller retains ownership of a supplied context.
+    pub fn openNthCtx(ctx: ?*anyopaque, nth: usize) Error!WchLink {
+        const device = usb.openNth(ctx, VENDOR_ID, PRODUCT_ID, nth) catch |e| {
             // Detect whether it is in DAP mode instead.
-            if (usb.openNth(VENDOR_ID_DAP, PRODUCT_ID_DAP, nth)) |dap| {
+            if (usb.openNth(ctx, VENDOR_ID_DAP, PRODUCT_ID_DAP, nth)) |dap| {
                 var d = dap;
                 d.deinit();
                 return Error.ProbeModeNotSupported;
@@ -208,7 +215,10 @@ pub const WchLink = struct {
 
 /// Switch the nth probe from RV mode to DAP mode.
 pub fn switchFromRvToDap(nth: usize) Error!void {
-    var p = try WchLink.openNth(nth);
+    return switchFromRvToDapCtx(null, nth);
+}
+pub fn switchFromRvToDapCtx(ctx: ?*anyopaque, nth: usize) Error!void {
+    var p = try WchLink.openNthCtx(ctx, nth);
     defer p.deinit();
     if (p.info.variant.supportSwitchMode()) {
         std.log.info("Switch mode for WCH-LinkRV", .{});
@@ -221,7 +231,10 @@ pub fn switchFromRvToDap(nth: usize) Error!void {
 
 /// Switch the nth probe from DAP mode to RV mode.
 pub fn switchFromDapToRv(nth: usize) Error!void {
-    var dev = try usb.openNth(VENDOR_ID_DAP, PRODUCT_ID_DAP, nth);
+    return switchFromDapToRvCtx(null, nth);
+}
+pub fn switchFromDapToRvCtx(ctx: ?*anyopaque, nth: usize) Error!void {
+    var dev = try usb.openNth(ctx, VENDOR_ID_DAP, PRODUCT_ID_DAP, nth);
     defer dev.deinit();
     std.log.info("Switch mode WCH-LinkDAP {x:0>4}:{x:0>4} #{d}", .{ VENDOR_ID_DAP, PRODUCT_ID_DAP, nth });
     const buf = [_]u8{ 0x81, 0xff, 0x01, 0x52 };
@@ -230,7 +243,10 @@ pub fn switchFromDapToRv(nth: usize) Error!void {
 
 /// Enable/disable the probe's power output (WCH-LinkE/W only).
 pub fn setPowerOutputEnabled(nth: usize, cmd: commands.SetPower) Error!void {
-    var p = try WchLink.openNth(nth);
+    return setPowerOutputEnabledCtx(null, nth, cmd);
+}
+pub fn setPowerOutputEnabledCtx(ctx: ?*anyopaque, nth: usize, cmd: commands.SetPower) Error!void {
+    var p = try WchLink.openNthCtx(ctx, nth);
     defer p.deinit();
     if (!p.info.variant.supportPowerFuncs()) {
         std.log.err("Probe doesn't support power control", .{});

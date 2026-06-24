@@ -23,7 +23,7 @@ pub fn findPort(io: std.Io, allocator: std.mem.Allocator, buf: []u8) Error!?[]co
     // Probe serial helps disambiguate when several modems are present.
     var serial_buf: [64]u8 = undefined;
     var probe_serial: ?[]const u8 = null;
-    if (usb.listDevices(allocator, probe.VENDOR_ID, probe.PRODUCT_ID)) |listings| {
+    if (usb.listDevices(allocator, null, probe.VENDOR_ID, probe.PRODUCT_ID)) |listings| {
         defer usb.freeListings(allocator, listings);
         if (listings.len > 0 and listings[0].serial.len <= serial_buf.len) {
             @memcpy(serial_buf[0..listings[0].serial.len], listings[0].serial);

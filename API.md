@@ -37,6 +37,25 @@ const wlink = @import("wlink");
 > does not need a `std.Io` instance for probe operations. Only file and serial helpers
 > (`firmware.readFromFile`, `serial_monitor.*`) take an `io: std.Io`.
 
+### Sharing a libusb context
+
+By default each open/list call creates and owns a private libusb context. To share an
+existing context (e.g. one your app already created), pass it to the `*Ctx` variants.
+The context parameter is `?*anyopaque` so it accepts a `*libusb_context` from **any**
+module's libusb `@cImport` (the opaque types are distinct but layout-identical); `null`
+means "create a private context". A caller-supplied context is **not** freed by the
+library — you keep ownership.
+
+```zig
+// `my_ctx` is your `*c.libusb_context` (your own @cImport). It coerces to ?*anyopaque.
+var probe = try wlink.WchLink.openNthCtx(my_ctx, 0);
+var sess = try wlink.ProbeSession.attach(probe, null, .high);
+defer sess.deinit(); // closes the device; leaves my_ctx alone
+
+const listings = try wlink.usb.listDevices(gpa, my_ctx, wlink.probe.VENDOR_ID, wlink.probe.PRODUCT_ID);
+defer wlink.usb.freeListings(gpa, listings);
+```
+
 ## Quick start
 
 ```zig
@@ -118,7 +137,8 @@ pub const WchLink = struct {
 
 | Function | Signature | Description |
 |---|---|---|
-| `openNth` | `(nth: usize) Error!WchLink` | Open the nth WCH-Link in RV mode. Returns `error.ProbeModeNotSupported` if the device is only present in DAP mode. Reads `info` on open. |
+| `openNth` | `(nth: usize) Error!WchLink` | Open the nth WCH-Link in RV mode (private libusb context). Returns `error.ProbeModeNotSupported` if the device is only present in DAP mode. Reads `info` on open. |
+| `openNthCtx` | `(ctx: ?*anyopaque, nth: usize) Error!WchLink` | As `openNth`, but uses a caller-supplied libusb context (`null` = create one). The caller keeps ownership of a supplied context. |
 | `deinit` | `(*WchLink) void` | Release the interface and close the device. |
 | `transact` | `(*WchLink, cmd_id: u8, payload: []const u8) Error![]const u8` | Send a command frame, return the reply **payload** (validates framing; `error.Protocol` on a 0x81 error reply). Slice valid until the next call. |
 | `transactRaw` | `(*WchLink, cmd_id: u8, payload: []const u8) Error![]const u8` | As `transact` but returns the full raw reply (for non-standard replies like ESignature). |
@@ -137,6 +157,9 @@ pub const WchLink = struct {
 | `switchFromRvToDap` | `(nth: usize) Error!void` | Switch the nth probe RV → DAP mode. |
 | `switchFromDapToRv` | `(nth: usize) Error!void` | Switch the nth probe DAP → RV mode. |
 | `setPowerOutputEnabled` | `(nth: usize, cmd: commands.SetPower) Error!void` | Toggle 3.3 V / 5 V output (WCH-LinkE/W only). |
+
+Each has a `*Ctx` variant taking a leading `ctx: ?*anyopaque` (shared libusb context):
+`switchFromRvToDapCtx`, `switchFromDapToRvCtx`, `setPowerOutputEnabledCtx`.
 
 ### Constants (`wlink.probe`)
 
@@ -333,8 +356,8 @@ pub const Listing = struct { index: usize, vid: u16, pid: u16, serial: []const u
 
 | Function | Signature | Description |
 |---|---|---|
-| `openNth` | `(vid: u16, pid: u16, nth: usize) Error!Device` | Open + claim interface 0 of the nth match. |
-| `listDevices` | `(allocator, vid, pid) (Error \|\| Allocator.Error)![]Listing` | Enumerate matches (serials read via `libusb_get_device_string`, no open). |
+| `openNth` | `(ctx: ?*anyopaque, vid: u16, pid: u16, nth: usize) Error!Device` | Open + claim interface 0 of the nth match. `ctx` null = private context. |
+| `listDevices` | `(allocator, ctx: ?*anyopaque, vid, pid) (Error \|\| Allocator.Error)![]Listing` | Enumerate matches (serials read via `libusb_get_device_string`, no open). `ctx` null = private context. |
 | `freeListings` | `(allocator, listings: []Listing) void` | Free a `listDevices` result. |
 | `mapErr` | `(rc: c_int) Error!void` | Map a libusb return code to `Error`. |
 | `errName` | `(rc: c_int) []const u8` | Human-readable libusb error. |
