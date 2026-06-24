@@ -1,0 +1,202 @@
+//! USB transport for the WCH-Link, backed by libusb (the zweiler2 Zig package).
+//!
+//! Replaces the Rust `nusb` backend. libusb is synchronous, so the async `.wait()`
+//! dance from the Rust code disappears: each endpoint op is one `libusb_bulk_transfer`.
+
+const std = @import("std");
+const Error = @import("error.zig").Error;
+
+pub const c = @cImport({
+    @cInclude("libusb.h");
+});
+
+/// Translate a libusb return code into our error set. `LIBUSB_SUCCESS` is 0.
+pub fn mapErr(rc: c_int) Error!void {
+    if (rc == c.LIBUSB_SUCCESS) return;
+    return switch (rc) {
+        c.LIBUSB_ERROR_TIMEOUT => Error.Timeout,
+        c.LIBUSB_ERROR_NO_DEVICE, c.LIBUSB_ERROR_NOT_FOUND => Error.ProbeNotFound,
+        else => Error.Usb,
+    };
+}
+
+pub fn errName(rc: c_int) []const u8 {
+    return switch (rc) {
+        c.LIBUSB_ERROR_IO => "I/O error",
+        c.LIBUSB_ERROR_INVALID_PARAM => "invalid parameter",
+        c.LIBUSB_ERROR_ACCESS => "access denied (driver/permissions)",
+        c.LIBUSB_ERROR_NO_DEVICE => "no such device",
+        c.LIBUSB_ERROR_NOT_FOUND => "not found",
+        c.LIBUSB_ERROR_BUSY => "resource busy",
+        c.LIBUSB_ERROR_TIMEOUT => "timed out",
+        c.LIBUSB_ERROR_OVERFLOW => "overflow",
+        c.LIBUSB_ERROR_PIPE => "pipe error",
+        c.LIBUSB_ERROR_INTERRUPTED => "interrupted",
+        c.LIBUSB_ERROR_NO_MEM => "out of memory",
+        c.LIBUSB_ERROR_NOT_SUPPORTED => "not supported",
+        else => "other error",
+    };
+}
+
+fn speedName(speed: c_int) []const u8 {
+    return switch (speed) {
+        c.LIBUSB_SPEED_SUPER_PLUS => "USB-SS+ 10000 Mbps",
+        c.LIBUSB_SPEED_SUPER => "USB-SS 5000 Mbps",
+        c.LIBUSB_SPEED_HIGH => "USB-HS 480 Mbps",
+        c.LIBUSB_SPEED_FULL => "USB-FS 12 Mbps",
+        c.LIBUSB_SPEED_LOW => "USB-LS 1.5 Mbps",
+        else => "(unknown)",
+    };
+}
+
+/// An opened WCH-Link USB device. Owns its own libusb context for simplicity
+/// (this is a single-device CLI tool, not a hot path).
+pub const Device = struct {
+    ctx: ?*c.libusb_context,
+    handle: ?*c.libusb_device_handle,
+    timeout_ms: c_uint = 5000,
+
+    pub fn deinit(self: *Device) void {
+        if (self.handle) |h| {
+            _ = c.libusb_release_interface(h, 0);
+            c.libusb_close(h);
+            self.handle = null;
+        }
+        if (self.ctx != null) {
+            c.libusb_exit(self.ctx);
+            self.ctx = null;
+        }
+    }
+
+    pub fn setTimeout(self: *Device, ms: u32) void {
+        self.timeout_ms = ms;
+    }
+
+    /// Read one bulk transfer from `ep`; returns the number of bytes read.
+    pub fn readEndpoint(self: *Device, ep: u8, buf: []u8) Error!usize {
+        var transferred: c_int = 0;
+        const rc = c.libusb_bulk_transfer(self.handle, ep, buf.ptr, @intCast(buf.len), &transferred, self.timeout_ms);
+        try mapErr(rc);
+        return @intCast(transferred);
+    }
+
+    /// Write `buf` to `ep`, looping until everything is sent.
+    pub fn writeEndpoint(self: *Device, ep: u8, buf: []const u8) Error!void {
+        var off: usize = 0;
+        while (off < buf.len) {
+            var transferred: c_int = 0;
+            const chunk = buf[off..];
+            const rc = c.libusb_bulk_transfer(self.handle, ep, @constCast(chunk.ptr), @intCast(chunk.len), &transferred, self.timeout_ms);
+            try mapErr(rc);
+            if (transferred == 0) return Error.Usb;
+            off += @intCast(transferred);
+        }
+    }
+};
+
+/// Open the nth device matching (vid, pid). nth is 0-based.
+pub fn openNth(vid: u16, pid: u16, nth: usize) Error!Device {
+    var ctx: ?*c.libusb_context = null;
+    if (c.libusb_init(&ctx) != c.LIBUSB_SUCCESS) return Error.Usb;
+    errdefer c.libusb_exit(ctx);
+
+    var list: [*c]?*c.libusb_device = undefined;
+    const n = c.libusb_get_device_list(ctx, &list);
+    if (n < 0) return Error.Usb;
+    defer c.libusb_free_device_list(list, 1);
+
+    const count: usize = @intCast(n);
+    var idx: usize = 0;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const dev = list[i];
+        var desc: c.libusb_device_descriptor = undefined;
+        if (c.libusb_get_device_descriptor(dev, &desc) != 0) continue;
+        if (desc.idVendor != vid or desc.idProduct != pid) continue;
+
+        if (idx == nth) {
+            var handle: ?*c.libusb_device_handle = null;
+            const rc_open = c.libusb_open(dev, &handle);
+            if (rc_open != c.LIBUSB_SUCCESS) {
+                std.log.err("Failed to open USB device: {s}", .{errName(rc_open)});
+                return Error.Usb;
+            }
+            errdefer c.libusb_close(handle);
+
+            const rc_claim = c.libusb_claim_interface(handle, 0);
+            if (rc_claim != c.LIBUSB_SUCCESS) {
+                std.log.err("Failed to claim interface: {s}", .{errName(rc_claim)});
+                return Error.Usb;
+            }
+            return Device{ .ctx = ctx, .handle = handle };
+        }
+        idx += 1;
+    }
+    return Error.ProbeNotFound;
+}
+
+/// A device listing entry. `serial` is owned by the caller's allocator.
+pub const Listing = struct {
+    index: usize,
+    vid: u16,
+    pid: u16,
+    serial: []const u8,
+    speed: []const u8,
+};
+
+/// Enumerate devices matching (vid, pid). Caller owns the returned slice and each
+/// entry's `serial`; free with `freeListings`.
+pub fn listDevices(allocator: std.mem.Allocator, vid: u16, pid: u16) (Error || std.mem.Allocator.Error)![]Listing {
+    var ctx: ?*c.libusb_context = null;
+    if (c.libusb_init(&ctx) != c.LIBUSB_SUCCESS) return Error.Usb;
+    defer c.libusb_exit(ctx);
+
+    var list: [*c]?*c.libusb_device = undefined;
+    const n = c.libusb_get_device_list(ctx, &list);
+    if (n < 0) return Error.Usb;
+    defer c.libusb_free_device_list(list, 1);
+
+    var out: std.ArrayList(Listing) = .empty;
+    errdefer {
+        for (out.items) |item| allocator.free(item.serial);
+        out.deinit(allocator);
+    }
+
+    const count: usize = @intCast(n);
+    var idx: usize = 0;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const dev = list[i];
+        var desc: c.libusb_device_descriptor = undefined;
+        if (c.libusb_get_device_descriptor(dev, &desc) != 0) continue;
+        if (desc.idVendor != vid or desc.idProduct != pid) continue;
+
+        const serial = readSerial(allocator, dev, &desc) catch try allocator.dupe(u8, "N/A");
+        try out.append(allocator, .{
+            .index = idx,
+            .vid = desc.idVendor,
+            .pid = desc.idProduct,
+            .serial = serial,
+            .speed = speedName(c.libusb_get_device_speed(dev)),
+        });
+        idx += 1;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+pub fn freeListings(allocator: std.mem.Allocator, listings: []Listing) void {
+    for (listings) |item| allocator.free(item.serial);
+    allocator.free(listings);
+}
+
+/// Best-effort serial-number read. Uses the zweiler2 fork's `libusb_get_device_string`
+/// extension, which reads the string descriptor without opening the device. The return
+/// value is the byte count including the NUL terminator, so the string is `buf[0..rc-1]`.
+fn readSerial(allocator: std.mem.Allocator, dev: ?*c.libusb_device, desc: *const c.libusb_device_descriptor) ![]const u8 {
+    if (desc.iSerialNumber == 0) return error.NoSerial;
+
+    var buf: [256]u8 = undefined;
+    const rc = c.libusb_get_device_string(dev, c.LIBUSB_DEVICE_STRING_SERIAL_NUMBER, &buf, buf.len);
+    if (rc <= 1) return error.NoSerial; // <0 error, or 1 = empty string (just NUL)
+    return allocator.dupe(u8, buf[0 .. @as(usize, @intCast(rc)) - 1]);
+}

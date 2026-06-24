@@ -1,0 +1,21 @@
+.{
+    .name = .wlink,
+    .version = "0.1.2",
+    .fingerprint = 0x9a388d2f70238cdb,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .libusb = .{
+            .url = "git+https://github.com/zweiler2/libusb#bc8a3c94afadb94ae4e7a8cf7a86c343f6254d54",
+            .hash = "libusb-1.0.29-TZJPwrdaAAACklO10YPcpv8r7Nmpwj5G9Fk3UhYnyjhT",
+        },
+        .serial = .{
+            .url = "git+https://github.com/arv3/zig-serial.git#d3557ed2462b49f63bd92bc8523d79fa79a7554e",
+            .hash = "serial-0.0.1-PoeRzLy_AAD_l0lYvIuWv8eFrnr1Qtc0-wxPbBzmWhG2",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

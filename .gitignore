@@ -3,3 +3,11 @@ trash/
 test.py
 
 firmware.bin
+
+# Zig
+.zig-cache/
+zig-out/
+zig-pkg/
+
+# Editor
+.zed/
