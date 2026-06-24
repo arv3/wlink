@@ -9,6 +9,7 @@ pub const std_options: std.Options = .{ .log_level = .info };
 
 const Cli = struct {
     device: usize = 0,
+    serial: ?[]const u8 = null,
     chip: ?wlink.RiscvChip = null,
     speed: wlink.Speed = .high,
     no_detach: bool = false,
@@ -43,6 +44,8 @@ pub fn main(init: std.process.Init) !u8 {
         if (eql(arg, "-d") or eql(arg, "--device")) {
             cli.device = std.fmt.parseInt(usize, it.next() orelse return usageErr(out, "missing value for --device"), 10) catch
                 return usageErr(out, "invalid --device value");
+        } else if (eql(arg, "--serial")) {
+            cli.serial = it.next() orelse return usageErr(out, "missing value for --serial");
         } else if (eql(arg, "--chip")) {
             const v = it.next() orelse return usageErr(out, "missing value for --chip");
             cli.chip = wlink.RiscvChip.fromStr(v) orelse return usageErr(out, "unknown --chip value");
@@ -91,6 +94,15 @@ pub fn main(init: std.process.Init) !u8 {
         try listProbes(gpa, out);
         return 0;
     }
+
+    // Resolve --serial to a device index for commands that open a probe.
+    if (cli.serial) |sn| {
+        cli.device = wlink.probe.indexBySerial(sn) catch |e| {
+            try out.print("Failed to resolve probe serial {s}: {t}\n", .{ sn, e });
+            return 1;
+        };
+    }
+
     if (eql(command, "status")) return statusCommand(out, cli);
     if (eql(command, "regs")) return regsCommand(out, cli);
     if (eql(command, "dump")) return dumpCommand(gpa, out, cli);
@@ -454,6 +466,7 @@ fn printHelp(out: *std.Io.Writer) !void {
         \\
         \\OPTIONS:
         \\  -d, --device <N>   Device index (default 0)
+        \\      --serial <S>   Select probe by serial number (overrides --device)
         \\      --chip <NAME>  Expected chip family (e.g. CH32V307)
         \\      --speed <S>    low | medium | high (default high)
         \\      --no-detach    Do not detach the chip after the operation

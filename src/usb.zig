@@ -213,14 +213,56 @@ pub fn freeListings(allocator: std.mem.Allocator, listings: []Listing) void {
     allocator.free(listings);
 }
 
-/// Best-effort serial-number read. Uses the zweiler2 fork's `libusb_get_device_string`
-/// extension, which reads the string descriptor without opening the device. The return
-/// value is the byte count including the NUL terminator, so the string is `buf[0..rc-1]`.
-fn readSerial(allocator: std.mem.Allocator, dev: ?*c.libusb_device, desc: *const c.libusb_device_descriptor) ![]const u8 {
-    if (desc.iSerialNumber == 0) return error.NoSerial;
+/// Read a device serial into `buf` without opening the device, using the zweiler2
+/// fork's `libusb_get_device_string` extension. The return value is the byte count
+/// including the NUL terminator, so the string is `buf[0..rc-1]`. Returns null if the
+/// device has no serial or the read fails.
+fn serialInto(dev: ?*c.libusb_device, desc: *const c.libusb_device_descriptor, buf: []u8) ?[]const u8 {
+    if (desc.iSerialNumber == 0) return null;
+    const rc = c.libusb_get_device_string(dev, c.LIBUSB_DEVICE_STRING_SERIAL_NUMBER, buf.ptr, @intCast(buf.len));
+    if (rc <= 1) return null; // <0 error, or 1 = empty string (just NUL)
+    return buf[0 .. @as(usize, @intCast(rc)) - 1];
+}
 
+fn readSerial(allocator: std.mem.Allocator, dev: ?*c.libusb_device, desc: *const c.libusb_device_descriptor) ![]const u8 {
     var buf: [256]u8 = undefined;
-    const rc = c.libusb_get_device_string(dev, c.LIBUSB_DEVICE_STRING_SERIAL_NUMBER, &buf, buf.len);
-    if (rc <= 1) return error.NoSerial; // <0 error, or 1 = empty string (just NUL)
-    return allocator.dupe(u8, buf[0 .. @as(usize, @intCast(rc)) - 1]);
+    const s = serialInto(dev, desc, &buf) orelse return error.NoSerial;
+    return allocator.dupe(u8, s);
+}
+
+/// Resolve a device serial number to the 0-based index used by `openNth` (the position
+/// among devices matching (vid, pid), in libusb enumeration order). Returns
+/// `Error.ProbeNotFound` if no matching device carries that serial.
+///
+/// `ctx` null = create a private libusb context for the lookup; otherwise the caller's
+/// context is used and retained.
+pub fn indexBySerial(ctx: ?*anyopaque, vid: u16, pid: u16, serial: []const u8) Error!usize {
+    const owns_ctx = ctx == null;
+    var use_ctx: ?*c.libusb_context = asCtx(ctx);
+    if (owns_ctx) {
+        if (c.libusb_init(&use_ctx) != c.LIBUSB_SUCCESS) return Error.Usb;
+    }
+    defer if (owns_ctx) c.libusb_exit(use_ctx);
+
+    var list: [*c]?*c.libusb_device = undefined;
+    const n = c.libusb_get_device_list(use_ctx, &list);
+    if (n < 0) return Error.Usb;
+    defer c.libusb_free_device_list(list, 1);
+
+    const count: usize = @intCast(n);
+    var idx: usize = 0;
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const dev = list[i];
+        var desc: c.libusb_device_descriptor = undefined;
+        if (c.libusb_get_device_descriptor(dev, &desc) != 0) continue;
+        if (desc.idVendor != vid or desc.idProduct != pid) continue;
+
+        var buf: [256]u8 = undefined;
+        if (serialInto(dev, &desc, &buf)) |s| {
+            if (std.mem.eql(u8, s, serial)) return idx;
+        }
+        idx += 1;
+    }
+    return Error.ProbeNotFound;
 }

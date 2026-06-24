@@ -213,6 +213,14 @@ pub const WchLink = struct {
     }
 };
 
+/// Resolve a WCH-Link serial number to the index used by `WchLink.openNth`.
+pub fn indexBySerial(serial: []const u8) Error!usize {
+    return indexBySerialCtx(null, serial);
+}
+pub fn indexBySerialCtx(ctx: ?*anyopaque, serial: []const u8) Error!usize {
+    return usb.indexBySerial(ctx, VENDOR_ID, PRODUCT_ID, serial);
+}
+
 /// Switch the nth probe from RV mode to DAP mode.
 pub fn switchFromRvToDap(nth: usize) Error!void {
     return switchFromRvToDapCtx(null, nth);

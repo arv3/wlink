@@ -154,12 +154,19 @@ pub const WchLink = struct {
 
 | Function | Signature | Description |
 |---|---|---|
+| `indexBySerial` | `(serial: []const u8) Error!usize` | Resolve a WCH-Link serial number to the index used by `WchLink.openNth`. `Error.ProbeNotFound` if none matches. |
 | `switchFromRvToDap` | `(nth: usize) Error!void` | Switch the nth probe RV → DAP mode. |
 | `switchFromDapToRv` | `(nth: usize) Error!void` | Switch the nth probe DAP → RV mode. |
 | `setPowerOutputEnabled` | `(nth: usize, cmd: commands.SetPower) Error!void` | Toggle 3.3 V / 5 V output (WCH-LinkE/W only). |
 
 Each has a `*Ctx` variant taking a leading `ctx: ?*anyopaque` (shared libusb context):
-`switchFromRvToDapCtx`, `switchFromDapToRvCtx`, `setPowerOutputEnabledCtx`.
+`indexBySerialCtx`, `switchFromRvToDapCtx`, `switchFromDapToRvCtx`,
+`setPowerOutputEnabledCtx`.
+
+```zig
+const nth = try wlink.probe.indexBySerial("FABC8F067FEE");
+var probe = try wlink.WchLink.openNth(nth);
+```
 
 ### Constants (`wlink.probe`)
 
@@ -358,6 +365,7 @@ pub const Listing = struct { index: usize, vid: u16, pid: u16, serial: []const u
 |---|---|---|
 | `openNth` | `(ctx: ?*anyopaque, vid: u16, pid: u16, nth: usize) Error!Device` | Open + claim interface 0 of the nth match. `ctx` null = private context. |
 | `listDevices` | `(allocator, ctx: ?*anyopaque, vid, pid) (Error \|\| Allocator.Error)![]Listing` | Enumerate matches (serials read via `libusb_get_device_string`, no open). `ctx` null = private context. |
+| `indexBySerial` | `(ctx: ?*anyopaque, vid, pid, serial: []const u8) Error!usize` | Resolve a serial to the 0-based `openNth` index. `ctx` null = private context. |
 | `freeListings` | `(allocator, listings: []Listing) void` | Free a `listDevices` result. |
 | `mapErr` | `(rc: c_int) Error!void` | Map a libusb return code to `Error`. |
 | `errName` | `(rc: c_int) []const u8` | Human-readable libusb error. |
