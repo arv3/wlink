@@ -38,7 +38,10 @@ pub fn main(init: std.process.Init) !u8 {
     defer out.flush() catch {};
 
     var cli = Cli{};
-    var it = init.minimal.args.iterate();
+    // iterateAllocator works on every platform (plain iterate() is unsupported on
+    // Windows, where the command line must be parsed via the allocator).
+    var it = try init.minimal.args.iterateAllocator(gpa);
+    defer it.deinit();
     _ = it.next(); // argv0
     while (it.next()) |arg| {
         if (eql(arg, "-d") or eql(arg, "--device")) {

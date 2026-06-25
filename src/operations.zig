@@ -1,6 +1,7 @@
 //! Predefined operations for WCH-Link — the `ProbeSession`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const commands = @import("commands.zig");
 const probe_mod = @import("probe.zig");
 const WchLink = probe_mod.WchLink;
@@ -10,14 +11,25 @@ const Error = @import("error.zig").Error;
 const Speed = commands.Speed;
 const ConfigChip = commands.ConfigChip;
 
-/// Sleep helper. Uses libc (already linked via libusb) so the library stays
-/// independent of the std Io instance.
+/// Sleep helper, kept independent of the std Io instance. Uses the OS clock directly
+/// (libc `nanosleep` on POSIX, kernel32 `Sleep` on Windows). The `switch` operand is
+/// comptime-known, so only the matching prong is analysed.
 pub fn sleepMs(ms: u64) void {
-    const ts = std.c.timespec{
-        .sec = @intCast(ms / 1000),
-        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
-    };
-    _ = std.c.nanosleep(&ts, null);
+    switch (builtin.os.tag) {
+        .windows => {
+            const k32 = struct {
+                extern "kernel32" fn Sleep(ms: std.os.windows.DWORD) callconv(.winapi) void;
+            };
+            k32.Sleep(@intCast(ms));
+        },
+        else => {
+            const ts = std.c.timespec{
+                .sec = @intCast(ms / 1000),
+                .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
+            };
+            _ = std.c.nanosleep(&ts, null);
+        },
+    }
 }
 
 fn setSpeed(p: *WchLink, riscvchip: u8, speed: Speed) Error!void {
