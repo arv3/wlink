@@ -211,6 +211,35 @@ pub const WchLink = struct {
         const payload = try self.transact(0x0d, &.{0x01});
         return ProbeInfo.fromPayload(payload);
     }
+
+    /// Enable/disable the probe's power output on an already-opened probe.
+    /// Only the WCH-LinkE and WCH-LinkW variants support this.
+    pub fn setPower(self: *WchLink, cmd: commands.SetPower) Error!void {
+        if (!self.info.variant.supportPowerFuncs()) {
+            std.log.err("Probe doesn't support power control", .{});
+            return Error.Custom;
+        }
+        try self.send(commands.CMD_CONTROL, cmd.payload());
+        switch (cmd) {
+            .enable_3v3 => std.log.info("Enable 3.3V Output", .{}),
+            .disable_3v3 => std.log.info("Disable 3.3V Output", .{}),
+            .enable_5v => std.log.info("Enable 5V Output", .{}),
+            .disable_5v => std.log.info("Disable 5V Output", .{}),
+        }
+    }
+
+    pub fn enable3v3(self: *WchLink) Error!void {
+        return self.setPower(.enable_3v3);
+    }
+    pub fn disable3v3(self: *WchLink) Error!void {
+        return self.setPower(.disable_3v3);
+    }
+    pub fn enable5v(self: *WchLink) Error!void {
+        return self.setPower(.enable_5v);
+    }
+    pub fn disable5v(self: *WchLink) Error!void {
+        return self.setPower(.disable_5v);
+    }
 };
 
 /// Resolve a WCH-Link serial number to the index used by `WchLink.openNth`.
@@ -256,15 +285,5 @@ pub fn setPowerOutputEnabled(nth: usize, cmd: commands.SetPower) Error!void {
 pub fn setPowerOutputEnabledCtx(ctx: ?*anyopaque, nth: usize, cmd: commands.SetPower) Error!void {
     var p = try WchLink.openNthCtx(ctx, nth);
     defer p.deinit();
-    if (!p.info.variant.supportPowerFuncs()) {
-        std.log.err("Probe doesn't support power control", .{});
-        return Error.Custom;
-    }
-    try p.send(commands.CMD_CONTROL, cmd.payload());
-    switch (cmd) {
-        .enable_3v3 => std.log.info("Enable 3.3V Output", .{}),
-        .disable_3v3 => std.log.info("Disable 3.3V Output", .{}),
-        .enable_5v => std.log.info("Enable 5V Output", .{}),
-        .disable_5v => std.log.info("Disable 5V Output", .{}),
-    }
+    try p.setPower(cmd);
 }

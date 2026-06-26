@@ -147,6 +147,8 @@ pub const WchLink = struct {
 | `writeDataWithProgress` | `(*WchLink, buf, packet_len, ctx: ?*anyopaque, cb: ?ProgressFn) Error!void` | As above with a per-packet callback. |
 | `readData` | `(*WchLink, buf: []u8) Error!void` | Read exactly `buf.len` bytes from the data-in endpoint. |
 | `getProbeInfo` | `(*WchLink) Error!ProbeInfo` | Query firmware version/variant (0x0d 0x01). |
+| `setPower` | `(*WchLink, cmd: commands.SetPower) Error!void` | Toggle power output on an already-open probe (WCH-LinkE/W only). |
+| `enable3v3` / `disable3v3` / `enable5v` / `disable5v` | `(*WchLink) Error!void` | Shortcuts for `setPower`. |
 
 `pub const ProgressFn = *const fn (ctx: ?*anyopaque, nbytes: usize) void;`
 
