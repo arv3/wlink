@@ -27,6 +27,7 @@ pub const ProbeSession = operations.ProbeSession;
 pub const regs = @import("regs.zig");
 pub const dmi = @import("dmi.zig");
 pub const firmware = @import("firmware.zig");
+pub const flash = @import("flash.zig");
 pub const serial_monitor = @import("serial_monitor.zig");
 
 test {

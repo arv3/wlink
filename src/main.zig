@@ -177,6 +177,7 @@ const ProgressState = struct {
     fn cb(ctx: ?*anyopaque, written: usize, total: usize) void {
         const self: *ProgressState = @ptrCast(@alignCast(ctx.?));
         self.out.print("\rFlashing: {d}/{d} bytes", .{ written, total }) catch {};
+        if (written == total) self.out.print("\n", .{}) catch {};
         self.out.flush() catch {};
     }
 };
@@ -199,45 +200,15 @@ fn flashCommand(gpa: std.mem.Allocator, io: std.Io, out: *std.Io.Writer, cli: Cl
 
     var prog = ProgressState{ .out = out };
 
-    switch (fw) {
-        .binary => |data| {
-            if (cli.skip_gap) std.log.warn("Skip gap is ignored when flashing binary", .{});
-            const start = cli.address orelse sess.chip_family.codeFlashStart();
-            std.log.info("Flashing {d} bytes to 0x{x:0>8}", .{ data.len, start });
-            sess.writeFlash(data, start, &prog, ProgressState.cb) catch |e| return reportErr(out, "writeFlash", e);
-            try out.print("\n", .{});
-        },
-        .sections => |orig_secs| {
-            if (cli.address != null) std.log.warn("--address is ignored when flashing ELF or ihex", .{});
-            // fillTinyGap consumes the section slice; detach it from `fw` so deinit
-            // doesn't double-free.
-            fw = .{ .sections = &.{} };
-            const max_gap: u32 = if (cli.skip_gap) 4096 else 0xFFFFFFFF;
-            if (cli.skip_gap) std.log.warn("Skip gap is an experimental feature using a trait of wchlink!", .{});
-            const secs = wlink.firmware.fillTinyGap(gpa, orig_secs, max_gap) catch |e| return reportErr(out, "merge sections", e);
-            defer {
-                for (secs) |s| gpa.free(s.data);
-                gpa.free(secs);
-            }
-
-            var offset: u32 = 0;
-            for (secs) |section| {
-                const start = sess.chip_family.fixCodeFlashStart(section.address);
-                std.log.info("Flashing {d} bytes to 0x{x:0>8}", .{ section.data.len, start });
-                std.log.info("offset: 0x{x:0>8}", .{offset});
-                sess.writeFlash(section.data, start - offset, &prog, ProgressState.cb) catch |e| return reportErr(out, "writeFlash", e);
-                try out.print("\n", .{});
-                offset += ((@as(u32, @intCast(section.data.len)) + 4095) / 4096) * 4096;
-            }
-        },
-    }
-
-    std.log.info("Flash done", .{});
-    wlink.operations.sleepMs(500);
+    wlink.flash.flashFirmware(&sess, gpa, &fw, .{
+        .address = cli.address,
+        .skip_gap = cli.skip_gap,
+        .no_run = cli.no_run,
+        .progress_ctx = &prog,
+        .progress = ProgressState.cb,
+    }) catch |e| return reportErr(out, "flash", e);
 
     if (!cli.no_run) {
-        std.log.info("Now reset...", .{});
-        sess.softReset() catch |e| return reportErr(out, "soft reset", e);
         if (cli.enable_sdi_print) {
             sess.setSdiPrintEnabled(true) catch |e| return reportErr(out, "setSdiPrintEnabled", e);
             std.log.info("Now connect to the WCH-Link serial port to read SDI print", .{});

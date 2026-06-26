@@ -72,16 +72,11 @@ pub fn main(init: std.process.Init) !u8 {
 
     try sess.dumpInfo();
 
-    // Flash an ELF/ihex/bin file.
+    // Flash an ELF/ihex/bin file and reset-to-run.
     var fw = try wlink.firmware.readFromFile(gpa, init.io, "firmware.elf");
     defer fw.deinit(gpa);
-    switch (fw) {
-        .binary => |data| try sess.writeFlash(data, sess.chip_family.codeFlashStart(), null, null),
-        .sections => |secs| for (secs) |s|
-            try sess.writeFlash(s.data, sess.chip_family.fixCodeFlashStart(s.address), null, null),
-    }
+    try wlink.flash.flashFirmware(&sess, gpa, &fw, .{}); // .no_run / .skip_gap / progress opt-in
 
-    try sess.softReset();
     try sess.detachChip();
     return 0;
 }
@@ -121,6 +116,7 @@ pub fn main(init: std.process.Init) !u8 {
 | `dmi` | namespace | RISC-V debug-module access |
 | `regs` | namespace | register numbers + bitfield structs |
 | `firmware` | namespace | firmware file parsing |
+| `flash` | namespace | high-level flash operation |
 | `serial_monitor` | namespace | SDI-print / serial monitor |
 
 ---
@@ -296,6 +292,34 @@ pub const Firmware = union(enum) {
 | `fillTinyGap` | `(allocator, sections: []Section, max_tiny_gap: u32) ReadError![]Section` | Merge sections ≤ `max_tiny_gap` apart (zero-filling). **Consumes** `sections`. |
 
 `ReadError = Error || Allocator.Error || error{ InvalidHex, InvalidElf, EmptyImage }`.
+
+---
+
+## `flash` — high-level flash operation (`wlink.flash`)
+
+Writes a parsed `Firmware` to an attached target and optionally resets it to run.
+The caller still owns probe open/attach, pre-flash erase, and post-flash detach;
+this only writes the image and resets-to-run.
+
+```zig
+pub const ProgressFn = *const fn (ctx: ?*anyopaque, written: usize, total: usize) void;
+pub const Options = struct {
+    address: ?u32 = null,          // binary only; null = chip default code-flash start
+    skip_gap: bool = false,        // merge sections ≤ 4096 B apart (ELF/ihex only)
+    no_run: bool = false,          // leave target halted instead of reset-to-run
+    progress_ctx: ?*anyopaque = null,
+    progress: ?ProgressFn = null,  // called with (written, total); written==total ends a section
+};
+```
+
+| Function | Signature | Description |
+|---|---|---|
+| `flashFirmware` | `(sess: *ProbeSession, allocator, fw: *Firmware, opts: Options) firmware.ReadError!void` | Flash `fw`, then reset-to-run unless `opts.no_run`. |
+
+**Ownership:** `fw` is passed by pointer. For a section image the routine consumes
+the sections and resets `fw.*` to an empty image, so the caller's
+`defer fw.deinit(allocator)` stays correct. A binary image is left intact for the
+caller to free. `allocator` must be the one that produced `fw`.
 
 ---
 
