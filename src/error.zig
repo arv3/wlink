@@ -43,6 +43,8 @@ pub const Error = error{
     Io,
     /// Windows CH375 driver error.
     Driver,
+    /// Read-back after flashing did not match the written data.
+    VerifyFailed,
 };
 
 /// Abstract command error causes, from the `abstractcs.cmderr` field.

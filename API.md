@@ -307,6 +307,7 @@ pub const Options = struct {
     address: ?u32 = null,          // binary only; null = chip default code-flash start
     skip_gap: bool = false,        // merge sections ≤ 4096 B apart (ELF/ihex only)
     no_run: bool = false,          // leave target halted instead of reset-to-run
+    verify: bool = false,          // read each region back and compare to written data
     progress_ctx: ?*anyopaque = null,
     progress: ?ProgressFn = null,  // called with (written, total); written==total ends a section
 };
@@ -314,7 +315,7 @@ pub const Options = struct {
 
 | Function | Signature | Description |
 |---|---|---|
-| `flashFirmware` | `(sess: *ProbeSession, allocator, fw: *Firmware, opts: Options) firmware.ReadError!void` | Flash `fw`, then reset-to-run unless `opts.no_run`. |
+| `flashFirmware` | `(sess: *ProbeSession, allocator, fw: *Firmware, opts: Options) firmware.ReadError!void` | Flash `fw`, optionally verify (`opts.verify`), then reset-to-run unless `opts.no_run`. |
 
 **Ownership:** `fw` is passed by pointer. For a section image the routine consumes
 the sections and resets `fw.*` to an empty image, so the caller's

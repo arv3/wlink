@@ -18,6 +18,7 @@ const Cli = struct {
     erase: bool = false,
     skip_gap: bool = false,
     no_run: bool = false,
+    verify: bool = false,
     enable_sdi_print: bool = false,
     watch_serial: bool = false,
     method: []const u8 = "default",
@@ -66,6 +67,8 @@ pub fn main(init: std.process.Init) !u8 {
             cli.skip_gap = true;
         } else if (eql(arg, "-R") or eql(arg, "--no-run")) {
             cli.no_run = true;
+        } else if (eql(arg, "-v") or eql(arg, "--verify")) {
+            cli.verify = true;
         } else if (eql(arg, "--enable-sdi-print")) {
             cli.enable_sdi_print = true;
         } else if (eql(arg, "--watch-serial")) {
@@ -204,6 +207,7 @@ fn flashCommand(gpa: std.mem.Allocator, io: std.Io, out: *std.Io.Writer, cli: Cl
         .address = cli.address,
         .skip_gap = cli.skip_gap,
         .no_run = cli.no_run,
+        .verify = cli.verify,
         .progress_ctx = &prog,
         .progress = ProgressState.cb,
     }) catch |e| return reportErr(out, "flash", e);
@@ -469,6 +473,7 @@ fn printHelp(out: *std.Io.Writer) !void {
         \\  -e, --erase            Erase before flashing
         \\  -s, --skip-gap         Skip gaps between sections (experimental)
         \\  -R, --no-run           Do not reset & run after flashing
+        \\  -v, --verify           Read flash back and verify it matches
         \\      --enable-sdi-print Enable SDI print after reset
         \\      --watch-serial     Stream the serial port after reset
         \\

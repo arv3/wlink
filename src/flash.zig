@@ -30,6 +30,9 @@ pub const Options = struct {
     /// When false (default), reset the target to run after flashing. When true,
     /// leave the target halted.
     no_run: bool = false,
+    /// Read each flashed region back and compare it against the written data,
+    /// returning `Error.VerifyFailed` on the first mismatch.
+    verify: bool = false,
     /// Optional progress callback and its opaque context.
     progress_ctx: ?*anyopaque = null,
     progress: ?ProgressFn = null,
@@ -54,6 +57,7 @@ pub fn flashFirmware(
             const start = opts.address orelse sess.chip_family.codeFlashStart();
             std.log.info("Flashing {d} bytes to 0x{x:0>8}", .{ data.len, start });
             try sess.writeFlash(data, start, opts.progress_ctx, opts.progress);
+            if (opts.verify) try verifyRegion(sess, allocator, data, start);
         },
         .sections => |orig_secs| {
             if (opts.address != null) std.log.warn("--address is ignored when flashing ELF or ihex", .{});
@@ -74,6 +78,7 @@ pub fn flashFirmware(
                 std.log.info("Flashing {d} bytes to 0x{x:0>8}", .{ section.data.len, start });
                 std.log.info("offset: 0x{x:0>8}", .{offset});
                 try sess.writeFlash(section.data, start - offset, opts.progress_ctx, opts.progress);
+                if (opts.verify) try verifyRegion(sess, allocator, section.data, start);
                 offset += ((@as(u32, @intCast(section.data.len)) + 4095) / 4096) * 4096;
             }
         },
@@ -86,4 +91,22 @@ pub fn flashFirmware(
         std.log.info("Now reset...", .{});
         try sess.softReset();
     }
+}
+
+/// Read `expected.len` bytes back from `address` and compare against `expected`.
+/// Returns `Error.VerifyFailed` (logging the first differing byte) on mismatch.
+fn verifyRegion(sess: *ProbeSession, allocator: std.mem.Allocator, expected: []const u8, address: u32) firmware.ReadError!void {
+    std.log.info("Verifying {d} bytes at 0x{x:0>8}", .{ expected.len, address });
+    // readMemory rounds the length up to a multiple of 4, so compare the prefix.
+    const got = try sess.readMemory(allocator, address, @intCast(expected.len));
+    defer allocator.free(got);
+    for (expected, 0..) |b, i| {
+        if (got[i] != b) {
+            std.log.err("Verify failed at 0x{x:0>8}: expected 0x{x:0>2}, got 0x{x:0>2}", .{
+                address + @as(u32, @intCast(i)), b, got[i],
+            });
+            return Error.VerifyFailed;
+        }
+    }
+    std.log.info("Verify OK", .{});
 }
