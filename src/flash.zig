@@ -76,7 +76,7 @@ pub fn flashFirmware(
             for (secs) |section| {
                 const start = sess.chip_family.fixCodeFlashStart(section.address);
                 std.log.info("Flashing {d} bytes to 0x{x:0>8}", .{ section.data.len, start });
-                std.log.info("offset: 0x{x:0>8}", .{offset});
+                std.log.debug("offset: 0x{x:0>8}", .{offset});
                 try sess.writeFlash(section.data, start - offset, opts.progress_ctx, opts.progress);
                 if (opts.verify) try verifyRegion(sess, allocator, section.data, start);
                 offset += ((@as(u32, @intCast(section.data.len)) + 4095) / 4096) * 4096;
