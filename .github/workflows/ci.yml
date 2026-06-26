@@ -9,15 +9,15 @@ on:
   release:
     types:
       - created
-  schedule: # Every day at the 2 P.M. (UTC) we run a scheduled nightly build
+  schedule: # Every day at 2 P.M. (UTC) we run a scheduled nightly build
     - cron: "0 14 * * *"
-
-env:
-  CARGO_TERM_COLOR: always
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
+
+env:
+  ZIG_VERSION: 0.16.0
 
 jobs:
   build:
@@ -27,8 +27,6 @@ jobs:
         config:
           - os: windows-latest
             arch: win-x64
-          - os: windows-latest
-            arch: win-x86
           - os: ubuntu-latest
             arch: linux-x64
           - os: macos-latest
@@ -37,36 +35,27 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Install libudev for Linux
-      if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y libudev-dev
-    - name: Set target
-      run: |
-        if [[ "${{ matrix.config.arch }}" == "win-x86" ]]; then
-          echo TARGET="--target i686-pc-windows-msvc" >> $GITHUB_ENV
-        else
-          echo TARGET="" >> $GITHUB_ENV
-        fi
-      shell: bash
+    - name: Install Zig
+      uses: mlugg/setup-zig@v2
+      with:
+        version: ${{ env.ZIG_VERSION }}
     - name: Build
-      run: cargo build --release ${{ env.TARGET }}
+      run: zig build -Doptimize=ReleaseSafe
     - name: Run tests
-      run: cargo test --release ${{ env.TARGET }} --verbose
+      run: zig build test
     - name: Run help
-      run: cargo run --release ${{ env.TARGET }} -- --help
+      run: zig build run -- --help
 
     - name: Prepare artifacts
       run: |
-        if [[ "${{ matrix.config.arch }}" == "win-x64" ]]; then
-          WLINK_EXE="target/release/wlink.exe"
-        elif [[ "${{ matrix.config.arch }}" == "win-x86" ]]; then
-          WLINK_EXE="target/i686-pc-windows-msvc/release/wlink.exe"
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          WLINK_EXE="zig-out/bin/wlink.exe"
         else
-          WLINK_EXE="target/release/wlink"
+          WLINK_EXE="zig-out/bin/wlink"
         fi
 
         mkdir wlink-${{ matrix.config.arch }}
-        cp $WLINK_EXE wlink-${{ matrix.config.arch }}
+        cp "$WLINK_EXE" wlink-${{ matrix.config.arch }}
         cp README.md wlink-${{ matrix.config.arch }}
       shell: bash
     - uses: actions/upload-artifact@v4
@@ -129,8 +118,6 @@ jobs:
           only-when-changed: true
           body: |
             This is a nightly binary release of the wlink command line tool.
-
-            For Windows users, please use the x86 version since it has the Windows driver support.
           files: |
             wlink-*.tar.gz
             wlink-*.zip
