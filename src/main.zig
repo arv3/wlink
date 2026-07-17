@@ -117,7 +117,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
 
-    try out.print("Unknown or not-yet-ported command: {s}\n", .{command});
+    try out.print("Unknown command: {s}\n", .{command});
     return 1;
 }
 
