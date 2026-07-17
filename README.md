@@ -1,20 +1,7 @@
 # wlink - WCH-Link(RV) command line tool
 
-[![Crates.io][badge-license]][crates]
-[![Crates.io][badge-version]][crates]
-[![docs.rs][badge-docsrs]][docsrs]
-[![GitHub release][badge-release]][nightly]
-
-[badge-license]: https://img.shields.io/crates/l/wlink?style=for-the-badge
-[badge-version]: https://img.shields.io/crates/v/wlink?style=for-the-badge
-[badge-docsrs]: https://img.shields.io/docsrs/wlink?style=for-the-badge
-[badge-release]: https://img.shields.io/github/v/release/ch32-rs/wlink?include_prereleases&style=for-the-badge
-[crates]: https://crates.io/crates/wlink
-[docsrs]: https://docs.rs/wlink
-[nightly]: https://github.com/ch32-rs/wlink/releases/tag/nightly
-
 > **Note**
-> This tool is still in development and not ready for production use.
+> This tool is still in development and not ready for production use. This fork is an LLM-asssisted port to Zig 0.16.
 
 ## Feature Support
 
