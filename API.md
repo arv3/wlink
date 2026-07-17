@@ -48,7 +48,7 @@ library — you keep ownership.
 
 ```zig
 // `my_ctx` is your `*c.libusb_context` (your own @cImport). It coerces to ?*anyopaque.
-var probe = try wlink.WchLink.openNthCtx(my_ctx, 0);
+var probe = try wlink.WchLink.openCtx(my_ctx, null); // null = first probe found
 var sess = try wlink.ProbeSession.attach(probe, null, .high);
 defer sess.deinit(); // closes the device; leaves my_ctx alone
 
@@ -65,8 +65,9 @@ const wlink = @import("wlink");
 pub fn main(init: std.process.Init) !u8 {
     const gpa = init.gpa;
 
-    // Open probe #0, attach to the target (auto-detect family), 6 MHz.
-    var probe = try wlink.WchLink.openNth(0);
+    // Open the first probe found, attach to the target (auto-detect family), 6 MHz.
+    var probe = try wlink.WchLink.open(null); // or pass a probe serial number
+
     var sess = try wlink.ProbeSession.attach(probe, null, .high);
     defer sess.deinit();
 
@@ -133,8 +134,8 @@ pub const WchLink = struct {
 
 | Function | Signature | Description |
 |---|---|---|
-| `openNth` | `(nth: usize) Error!WchLink` | Open the nth WCH-Link in RV mode (private libusb context). Returns `error.ProbeModeNotSupported` if the device is only present in DAP mode. Reads `info` on open. |
-| `openNthCtx` | `(ctx: ?*anyopaque, nth: usize) Error!WchLink` | As `openNth`, but uses a caller-supplied libusb context (`null` = create one). The caller keeps ownership of a supplied context. |
+| `open` | `(serial: ?[]const u8) Error!WchLink` | Open a WCH-Link in RV mode (private libusb context). `serial` selects a probe by serial number; `null` opens the first one found. Returns `error.ProbeModeNotSupported` if the device is only present in DAP mode. Reads `info` on open. |
+| `openCtx` | `(ctx: ?*anyopaque, serial: ?[]const u8) Error!WchLink` | As `open`, but uses a caller-supplied libusb context (`null` = create one). The caller keeps ownership of a supplied context. |
 | `deinit` | `(*WchLink) void` | Release the interface and close the device. |
 | `transact` | `(*WchLink, cmd_id: u8, payload: []const u8) Error![]const u8` | Send a command frame, return the reply **payload** (validates framing; `error.Protocol` on a 0x81 error reply). Slice valid until the next call. |
 | `transactRaw` | `(*WchLink, cmd_id: u8, payload: []const u8) Error![]const u8` | As `transact` but returns the full raw reply (for non-standard replies like ESignature). |
@@ -152,18 +153,15 @@ pub const WchLink = struct {
 
 | Function | Signature | Description |
 |---|---|---|
-| `indexBySerial` | `(serial: []const u8) Error!usize` | Resolve a WCH-Link serial number to the index used by `WchLink.openNth`. `Error.ProbeNotFound` if none matches. |
-| `switchFromRvToDap` | `(nth: usize) Error!void` | Switch the nth probe RV → DAP mode. |
-| `switchFromDapToRv` | `(nth: usize) Error!void` | Switch the nth probe DAP → RV mode. |
-| `setPowerOutputEnabled` | `(nth: usize, cmd: commands.SetPower) Error!void` | Toggle 3.3 V / 5 V output (WCH-LinkE/W only). |
+| `switchFromRvToDap` | `(serial: ?[]const u8) Error!void` | Switch a probe RV → DAP mode (`null` = first probe found). |
+| `switchFromDapToRv` | `(serial: ?[]const u8) Error!void` | Switch a probe DAP → RV mode (`null` = first probe found). |
+| `setPowerOutputEnabled` | `(serial: ?[]const u8, cmd: commands.SetPower) Error!void` | Toggle 3.3 V / 5 V output (WCH-LinkE/W only). |
 
 Each has a `*Ctx` variant taking a leading `ctx: ?*anyopaque` (shared libusb context):
-`indexBySerialCtx`, `switchFromRvToDapCtx`, `switchFromDapToRvCtx`,
-`setPowerOutputEnabledCtx`.
+`switchFromRvToDapCtx`, `switchFromDapToRvCtx`, `setPowerOutputEnabledCtx`.
 
 ```zig
-const nth = try wlink.probe.indexBySerial("FABC8F067FEE");
-var probe = try wlink.WchLink.openNth(nth);
+var probe = try wlink.WchLink.open("FABC8F067FEE");
 ```
 
 ### Constants (`wlink.probe`)
@@ -390,9 +388,8 @@ pub const Listing = struct { index: usize, vid: u16, pid: u16, serial: []const u
 
 | Function | Signature | Description |
 |---|---|---|
-| `openNth` | `(ctx: ?*anyopaque, vid: u16, pid: u16, nth: usize) Error!Device` | Open + claim interface 0 of the nth match. `ctx` null = private context. |
+| `open` | `(ctx: ?*anyopaque, vid: u16, pid: u16, serial: ?[]const u8) Error!Device` | Open + claim interface 0 of the first match (`serial` non-null: the one with that serial). `ctx` null = private context. |
 | `listDevices` | `(allocator, ctx: ?*anyopaque, vid, pid) (Error \|\| Allocator.Error)![]Listing` | Enumerate matches (serials read via `libusb_get_device_string`, no open). `ctx` null = private context. |
-| `indexBySerial` | `(ctx: ?*anyopaque, vid, pid, serial: []const u8) Error!usize` | Resolve a serial to the 0-based `openNth` index. `ctx` null = private context. |
 | `freeListings` | `(allocator, listings: []Listing) void` | Free a `listDevices` result. |
 | `mapErr` | `(rc: c_int) Error!void` | Map a libusb return code to `Error`. |
 | `errName` | `(rc: c_int) []const u8` | Human-readable libusb error. |

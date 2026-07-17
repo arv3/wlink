@@ -8,7 +8,6 @@ const wlink = @import("wlink");
 pub const std_options: std.Options = .{ .log_level = .info };
 
 const Cli = struct {
-    device: usize = 0,
     serial: ?[]const u8 = null,
     chip: ?wlink.RiscvChip = null,
     speed: wlink.Speed = .high,
@@ -45,10 +44,7 @@ pub fn main(init: std.process.Init) !u8 {
     defer it.deinit();
     _ = it.next(); // argv0
     while (it.next()) |arg| {
-        if (eql(arg, "-d") or eql(arg, "--device")) {
-            cli.device = std.fmt.parseInt(usize, it.next() orelse return usageErr(out, "missing value for --device"), 10) catch
-                return usageErr(out, "invalid --device value");
-        } else if (eql(arg, "--serial")) {
+        if (eql(arg, "--serial")) {
             cli.serial = it.next() orelse return usageErr(out, "missing value for --serial");
         } else if (eql(arg, "--chip")) {
             const v = it.next() orelse return usageErr(out, "missing value for --chip");
@@ -101,14 +97,6 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
 
-    // Resolve --serial to a device index for commands that open a probe.
-    if (cli.serial) |sn| {
-        cli.device = wlink.probe.indexBySerial(sn) catch |e| {
-            try out.print("Failed to resolve probe serial {s}: {t}\n", .{ sn, e });
-            return 1;
-        };
-    }
-
     if (eql(command, "status")) return statusCommand(out, cli);
     if (eql(command, "regs")) return regsCommand(out, cli);
     if (eql(command, "dump")) return dumpCommand(gpa, out, cli);
@@ -136,7 +124,7 @@ pub fn main(init: std.process.Init) !u8 {
 fn setPowerCommand(out: *std.Io.Writer, cli: Cli) !u8 {
     if (cli.npos < 2) return usageErr(out, "usage: set-power <enable-3v3|disable-3v3|enable-5v|disable-5v>");
     const p = wlink.commands.SetPower.fromStr(cli.positionals[1]) orelse return usageErr(out, "invalid power option");
-    wlink.probe.setPowerOutputEnabled(cli.device, p) catch |e| return reportErr(out, "set-power", e);
+    wlink.probe.setPowerOutputEnabled(cli.serial, p) catch |e| return reportErr(out, "set-power", e);
     return 0;
 }
 
@@ -148,9 +136,9 @@ fn modeSwitchCommand(gpa: std.mem.Allocator, out: *std.Io.Writer, cli: Cli) !u8 
         return 2;
     }
     if (cli.dap) {
-        wlink.probe.switchFromRvToDap(cli.device) catch |e| return reportErr(out, "mode-switch", e);
+        wlink.probe.switchFromRvToDap(cli.serial) catch |e| return reportErr(out, "mode-switch", e);
     } else {
-        wlink.probe.switchFromDapToRv(cli.device) catch |e| return reportErr(out, "mode-switch", e);
+        wlink.probe.switchFromDapToRv(cli.serial) catch |e| return reportErr(out, "mode-switch", e);
     }
     return 0;
 }
@@ -233,7 +221,7 @@ fn eraseCommand(out: *std.Io.Writer, cli: Cli) !u8 {
     if (!eql(cli.method, "default")) {
         // Special erase bypasses attach; requires --chip.
         const chip = cli.chip orelse return usageErr(out, "--chip required for a special erase");
-        var probe = wlink.WchLink.openNth(cli.device) catch |e| {
+        var probe = wlink.WchLink.open(cli.serial) catch |e| {
             try out.print("Failed to open probe: {t}\n", .{e});
             return 1;
         };
@@ -279,7 +267,7 @@ fn protectCommand(out: *std.Io.Writer, cli: Cli) !u8 {
 
 /// Open + attach. On failure prints and returns the error; otherwise returns the session.
 fn attach(out: *std.Io.Writer, cli: Cli) !wlink.ProbeSession {
-    const probe = wlink.WchLink.openNth(cli.device) catch |e| {
+    const probe = wlink.WchLink.open(cli.serial) catch |e| {
         try out.print("Failed to open probe: {t}\n", .{e});
         return e;
     };
@@ -443,8 +431,7 @@ fn printHelp(out: *std.Io.Writer) !void {
         \\USAGE: wlink [options] <command> [args]
         \\
         \\OPTIONS:
-        \\  -d, --device <N>   Device index (default 0)
-        \\      --serial <S>   Select probe by serial number (overrides --device)
+        \\      --serial <S>   Select probe by serial number (default: first probe found)
         \\      --chip <NAME>  Expected chip family (e.g. CH32V307)
         \\      --speed <S>    low | medium | high (default high)
         \\      --no-detach    Do not detach the chip after the operation

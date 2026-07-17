@@ -124,19 +124,20 @@ pub const WchLink = struct {
     /// Scratch buffer for command replies; a `transact` result points into this.
     in_buf: [64]u8 = undefined,
 
-    /// Open the nth WCH-Link in RV mode, creating a private libusb context.
+    /// Open a WCH-Link in RV mode, creating a private libusb context. `serial`
+    /// selects a specific probe by serial number; null opens the first one found.
     /// If the device is found only in DAP mode, returns Error.ProbeModeNotSupported.
-    pub fn openNth(nth: usize) Error!WchLink {
-        return openNthCtx(null, nth);
+    pub fn open(serial: ?[]const u8) Error!WchLink {
+        return openCtx(null, serial);
     }
 
-    /// Like `openNth`, but uses a caller-supplied libusb context (`null` = create one).
+    /// Like `open`, but uses a caller-supplied libusb context (`null` = create one).
     /// Pass a `*libusb_context` from any module's libusb `@cImport` (it coerces to
     /// `?*anyopaque`); the caller retains ownership of a supplied context.
-    pub fn openNthCtx(ctx: ?*anyopaque, nth: usize) Error!WchLink {
-        const device = usb.openNth(ctx, VENDOR_ID, PRODUCT_ID, nth) catch |e| {
+    pub fn openCtx(ctx: ?*anyopaque, serial: ?[]const u8) Error!WchLink {
+        const device = usb.open(ctx, VENDOR_ID, PRODUCT_ID, serial) catch |e| {
             // Detect whether it is in DAP mode instead.
-            if (usb.openNth(ctx, VENDOR_ID_DAP, PRODUCT_ID_DAP, nth)) |dap| {
+            if (usb.open(ctx, VENDOR_ID_DAP, PRODUCT_ID_DAP, serial)) |dap| {
                 var d = dap;
                 d.deinit();
                 return Error.ProbeModeNotSupported;
@@ -242,20 +243,12 @@ pub const WchLink = struct {
     }
 };
 
-/// Resolve a WCH-Link serial number to the index used by `WchLink.openNth`.
-pub fn indexBySerial(serial: []const u8) Error!usize {
-    return indexBySerialCtx(null, serial);
+/// Switch a probe from RV mode to DAP mode (`serial` null = first probe found).
+pub fn switchFromRvToDap(serial: ?[]const u8) Error!void {
+    return switchFromRvToDapCtx(null, serial);
 }
-pub fn indexBySerialCtx(ctx: ?*anyopaque, serial: []const u8) Error!usize {
-    return usb.indexBySerial(ctx, VENDOR_ID, PRODUCT_ID, serial);
-}
-
-/// Switch the nth probe from RV mode to DAP mode.
-pub fn switchFromRvToDap(nth: usize) Error!void {
-    return switchFromRvToDapCtx(null, nth);
-}
-pub fn switchFromRvToDapCtx(ctx: ?*anyopaque, nth: usize) Error!void {
-    var p = try WchLink.openNthCtx(ctx, nth);
+pub fn switchFromRvToDapCtx(ctx: ?*anyopaque, serial: ?[]const u8) Error!void {
+    var p = try WchLink.openCtx(ctx, serial);
     defer p.deinit();
     if (p.info.variant.supportSwitchMode()) {
         std.log.info("Switch mode for WCH-LinkRV", .{});
@@ -266,24 +259,24 @@ pub fn switchFromRvToDapCtx(ctx: ?*anyopaque, nth: usize) Error!void {
     }
 }
 
-/// Switch the nth probe from DAP mode to RV mode.
-pub fn switchFromDapToRv(nth: usize) Error!void {
-    return switchFromDapToRvCtx(null, nth);
+/// Switch a probe from DAP mode to RV mode (`serial` null = first probe found).
+pub fn switchFromDapToRv(serial: ?[]const u8) Error!void {
+    return switchFromDapToRvCtx(null, serial);
 }
-pub fn switchFromDapToRvCtx(ctx: ?*anyopaque, nth: usize) Error!void {
-    var dev = try usb.openNth(ctx, VENDOR_ID_DAP, PRODUCT_ID_DAP, nth);
+pub fn switchFromDapToRvCtx(ctx: ?*anyopaque, serial: ?[]const u8) Error!void {
+    var dev = try usb.open(ctx, VENDOR_ID_DAP, PRODUCT_ID_DAP, serial);
     defer dev.deinit();
-    std.log.info("Switch mode WCH-LinkDAP {x:0>4}:{x:0>4} #{d}", .{ VENDOR_ID_DAP, PRODUCT_ID_DAP, nth });
+    std.log.info("Switch mode WCH-LinkDAP {x:0>4}:{x:0>4}", .{ VENDOR_ID_DAP, PRODUCT_ID_DAP });
     const buf = [_]u8{ 0x81, 0xff, 0x01, 0x52 };
     dev.writeEndpoint(ENDPOINT_OUT_DAP, &buf) catch {};
 }
 
-/// Enable/disable the probe's power output (WCH-LinkE/W only).
-pub fn setPowerOutputEnabled(nth: usize, cmd: commands.SetPower) Error!void {
-    return setPowerOutputEnabledCtx(null, nth, cmd);
+/// Enable/disable the probe's power output (WCH-LinkE/W only; `serial` null = first probe).
+pub fn setPowerOutputEnabled(serial: ?[]const u8, cmd: commands.SetPower) Error!void {
+    return setPowerOutputEnabledCtx(null, serial, cmd);
 }
-pub fn setPowerOutputEnabledCtx(ctx: ?*anyopaque, nth: usize, cmd: commands.SetPower) Error!void {
-    var p = try WchLink.openNthCtx(ctx, nth);
+pub fn setPowerOutputEnabledCtx(ctx: ?*anyopaque, serial: ?[]const u8, cmd: commands.SetPower) Error!void {
+    var p = try WchLink.openCtx(ctx, serial);
     defer p.deinit();
     try p.setPower(cmd);
 }

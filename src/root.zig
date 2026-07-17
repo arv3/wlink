@@ -2,7 +2,7 @@
 //!
 //! A downstream project depends on this via `build.zig.zon` and imports it as:
 //!     const wlink = @import("wlink");
-//!     const probe = try wlink.WchLink.openNth(allocator, 0);
+//!     const probe = try wlink.WchLink.open(null); // or a probe serial number
 
 const std = @import("std");
 

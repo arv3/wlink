@@ -106,11 +106,13 @@ inline fn asCtx(ctx: ?*anyopaque) ?*c.libusb_context {
     return @ptrCast(ctx);
 }
 
-/// Open the nth device matching (vid, pid). nth is 0-based.
+/// Open the first device matching (vid, pid) and, when `serial` is non-null, that
+/// exact serial number. Devices whose serial cannot be read are skipped when a
+/// serial is requested.
 ///
 /// If `ctx` is non-null it is used and left owned by the caller; if null, a private
 /// libusb context is created and owned by the returned Device.
-pub fn openNth(ctx: ?*anyopaque, vid: u16, pid: u16, nth: usize) Error!Device {
+pub fn open(ctx: ?*anyopaque, vid: u16, pid: u16, serial: ?[]const u8) Error!Device {
     const owns_ctx = ctx == null;
     var use_ctx: ?*c.libusb_context = asCtx(ctx);
     if (owns_ctx) {
@@ -124,7 +126,6 @@ pub fn openNth(ctx: ?*anyopaque, vid: u16, pid: u16, nth: usize) Error!Device {
     defer c.libusb_free_device_list(list, 1);
 
     const count: usize = @intCast(n);
-    var idx: usize = 0;
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const dev = list[i];
@@ -132,23 +133,26 @@ pub fn openNth(ctx: ?*anyopaque, vid: u16, pid: u16, nth: usize) Error!Device {
         if (c.libusb_get_device_descriptor(dev, &desc) != 0) continue;
         if (desc.idVendor != vid or desc.idProduct != pid) continue;
 
-        if (idx == nth) {
-            var handle: ?*c.libusb_device_handle = null;
-            const rc_open = c.libusb_open(dev, &handle);
-            if (rc_open != c.LIBUSB_SUCCESS) {
-                std.log.err("Failed to open USB device: {s}", .{errName(rc_open)});
-                return Error.Usb;
-            }
-            errdefer c.libusb_close(handle);
-
-            const rc_claim = c.libusb_claim_interface(handle, 0);
-            if (rc_claim != c.LIBUSB_SUCCESS) {
-                std.log.err("Failed to claim interface: {s}", .{errName(rc_claim)});
-                return Error.Usb;
-            }
-            return Device{ .ctx = use_ctx, .owns_ctx = owns_ctx, .handle = handle };
+        if (serial) |want| {
+            var buf: [256]u8 = undefined;
+            const dev_serial = serialInto(dev, &desc, &buf) orelse continue;
+            if (!std.mem.eql(u8, dev_serial, want)) continue;
         }
-        idx += 1;
+
+        var handle: ?*c.libusb_device_handle = null;
+        const rc_open = c.libusb_open(dev, &handle);
+        if (rc_open != c.LIBUSB_SUCCESS) {
+            std.log.err("Failed to open USB device: {s}", .{errName(rc_open)});
+            return Error.Usb;
+        }
+        errdefer c.libusb_close(handle);
+
+        const rc_claim = c.libusb_claim_interface(handle, 0);
+        if (rc_claim != c.LIBUSB_SUCCESS) {
+            std.log.err("Failed to claim interface: {s}", .{errName(rc_claim)});
+            return Error.Usb;
+        }
+        return Device{ .ctx = use_ctx, .owns_ctx = owns_ctx, .handle = handle };
     }
     return Error.ProbeNotFound;
 }
@@ -230,39 +234,3 @@ fn readSerial(allocator: std.mem.Allocator, dev: ?*c.libusb_device, desc: *const
     return allocator.dupe(u8, s);
 }
 
-/// Resolve a device serial number to the 0-based index used by `openNth` (the position
-/// among devices matching (vid, pid), in libusb enumeration order). Returns
-/// `Error.ProbeNotFound` if no matching device carries that serial.
-///
-/// `ctx` null = create a private libusb context for the lookup; otherwise the caller's
-/// context is used and retained.
-pub fn indexBySerial(ctx: ?*anyopaque, vid: u16, pid: u16, serial: []const u8) Error!usize {
-    const owns_ctx = ctx == null;
-    var use_ctx: ?*c.libusb_context = asCtx(ctx);
-    if (owns_ctx) {
-        if (c.libusb_init(&use_ctx) != c.LIBUSB_SUCCESS) return Error.Usb;
-    }
-    defer if (owns_ctx) c.libusb_exit(use_ctx);
-
-    var list: [*c]?*c.libusb_device = undefined;
-    const n = c.libusb_get_device_list(use_ctx, &list);
-    if (n < 0) return Error.Usb;
-    defer c.libusb_free_device_list(list, 1);
-
-    const count: usize = @intCast(n);
-    var idx: usize = 0;
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        const dev = list[i];
-        var desc: c.libusb_device_descriptor = undefined;
-        if (c.libusb_get_device_descriptor(dev, &desc) != 0) continue;
-        if (desc.idVendor != vid or desc.idProduct != pid) continue;
-
-        var buf: [256]u8 = undefined;
-        if (serialInto(dev, &desc, &buf)) |s| {
-            if (std.mem.eql(u8, s, serial)) return idx;
-        }
-        idx += 1;
-    }
-    return Error.ProbeNotFound;
-}
